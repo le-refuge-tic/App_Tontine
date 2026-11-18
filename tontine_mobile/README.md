@@ -1,56 +1,142 @@
-# Welcome to your Expo app 👋
+# Application mobile de tontine
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Application Expo/React Native (SDK 58) pour gérer une tontine : cotisation quotidienne,
+hebdomadaire ou mensuelle, paiements Mobile Money via FedaPay. Pays : Bénin. Monnaie : FCFA.
 
-## Get started
+---
 
-1. Install dependencies
+## Prérequis
 
-   ```bash
-   npm install
-   ```
+- Node 20+
+- Expo Go installé sur le téléphone Android
+- Backend NestJS (`Tontine_App_Backend`) démarré sur le même réseau Wi-Fi
 
-2. Start the app
+---
 
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Démarrage rapide
 
 ```bash
-npm run reset-project
+# 1. Installer les dépendances
+npm install
+
+# 2. Copier et éditer les variables d'environnement
+cp .env.example .env
+#   → Éditez EXPO_PUBLIC_API_URL selon votre réseau (voir ci-dessous)
+
+# 3. Démarrer le serveur de développement
+npx expo start
+
+# 4. Scanner le QR code depuis Expo Go sur Android
 ```
 
-This command will move the starter code to the **example** directory and create a blank **src/app** directory where you can start developing.
+---
 
-### Other setup steps
+## Configuration réseau
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+L'app mobile doit joindre le backend NestJS via HTTP.
 
-## Learn more
+| Situation | Valeur de `EXPO_PUBLIC_API_URL` |
+|-----------|--------------------------------|
+| Téléphone réel sur le même Wi-Fi que le PC | `http://192.168.1.20:3000/api/v1` (remplacez par l'IP locale de votre PC) |
+| Émulateur Android (Android Studio) | `http://10.0.2.2:3000/api/v1` |
 
-To learn more about developing your project with Expo, look at the following resources:
+Trouvez l'IP locale de votre PC :
+- Windows : `ipconfig` → "Adresse IPv4"
+- macOS/Linux : `ifconfig` ou `ip a`
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+---
 
-## Join the community
+## Mode démo
 
-Join our community of developers creating universal apps.
+Sans backend, vous pouvez tester le design avec des données fictives (cas de Koffi : mise 500 F/jour,
+cycle de novembre, 2 jours payés, jours perdus, un jour ×2) :
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+```bash
+EXPO_PUBLIC_MODE_DEMO=true npx expo start
+```
+
+---
+
+## Stack
+
+| Couche | Technologie |
+|--------|------------|
+| Navigation | Expo Router (fichiers dans `src/app/`) |
+| Données serveur | @tanstack/react-query |
+| Authentification | expo-secure-store (accessToken + refreshToken) |
+| Polices | @expo-google-fonts/plus-jakarta-sans |
+| Icônes | @expo/vector-icons — Ionicons |
+| Dégradés | expo-linear-gradient |
+| Animations | react-native-reanimated v4 |
+| Retour haptique | expo-haptics |
+
+---
+
+## Routes backend disponibles (testées en mode réel)
+
+| Méthode | Route | Écran |
+|---------|-------|-------|
+| POST | /auth/inscription | Inscription |
+| POST | /auth/connexion | Connexion |
+| POST | /auth/rafraichir | Automatique (intercepteur) |
+| POST | /auth/deconnexion | Profil |
+| GET | /auth/moi | Restauration session |
+| POST | /auth/changer-password | Profil |
+| POST | /auth/code-retrait | Profil |
+| POST | /auth/code-retrait/verifier | Retrait |
+| GET | /souscriptions | Accueil, choisir-mise |
+| POST | /souscriptions | Choisir-mise |
+| GET | /cycles | Accueil, cotiser |
+| GET | /jours-cotisation | Accueil, cotiser |
+| GET | /portefeuilles | Accueil, retirer |
+| GET | /ecritures-comptables | Accueil, rapport |
+| GET | /notifications | Notifications |
+| PATCH | /notifications/:id/lue | Notifications |
+
+## Routes manquantes (marquées TODO(backend))
+
+Ces routes ne sont **pas encore implémentées** côté serveur. Jusqu'à leur ajout, l'app
+renvoie "Fonctionnalité pas encore disponible" en mode réel (et utilise les fixtures en mode démo).
+
+| Route attendue | Écran concerné | Comportement actuel |
+|----------------|---------------|---------------------|
+| POST `/depots` | Cotiser → paiement FedaPay | Toujours erreur en mode réel |
+| POST `/retraits` | Retirer → retrait Mobile Money | Toujours erreur en mode réel |
+| GET `/portefeuilles/moi` ou calcul `retirable` | Accueil, retirer | `retirable = null` (affiche `soldeCotisation` en fallback) |
+| GET `/cycles/:id/jours` ou enrichissement des cycles | Accueil, cotiser | Jours dissociés du cycle si > 1 souscription |
+
+---
+
+## Structure du projet
+
+```
+tontine_mobile/
+├── src/
+│   ├── app/            Écrans (Expo Router)
+│   │   ├── (auth)/     bienvenue, connexion, inscription
+│   │   ├── (onboarding)/ choisir-mise
+│   │   ├── (tabs)/     index (Accueil), cotiser, retirer, rapport
+│   │   ├── profil.tsx
+│   │   └── notifications.tsx
+│   ├── api/            Client HTTP + domaines + fixtures démo
+│   ├── components/     Composants réutilisables
+│   ├── constants/      NOM_APP, MISE_MINIMALE, env…
+│   ├── hooks/          useAuth, useRequetes
+│   ├── theme/          couleurs, typographie, espacements, rayons, ombres
+│   ├── types/          Déclarations TypeScript globales
+│   └── utils/          formaterFCFA, dates, telephone, haptics
+├── babel.config.js     Plugin Reanimated
+├── app.json
+└── .env.example
+```
+
+---
+
+## Commandes utiles
+
+```bash
+npx expo start          # démarrer le serveur dev
+npx tsc --noEmit        # vérifier les types
+npx expo lint           # linter ESLint
+npx expo install --fix  # corriger les versions incompatibles
+```
