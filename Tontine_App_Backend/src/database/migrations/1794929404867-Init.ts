@@ -1,0 +1,124 @@
+import { MigrationInterface, QueryRunner } from "typeorm";
+
+export class Init1794929404867 implements MigrationInterface {
+    name = 'Init1794929404867'
+
+    public async up(queryRunner: QueryRunner): Promise<void> {
+        await queryRunner.query(`CREATE TABLE "portefeuilles" ("id" SERIAL NOT NULL, "solde_cotisation" integer NOT NULL DEFAULT '0', "solde_epargne" integer NOT NULL DEFAULT '0', "solde_bloque" integer NOT NULL DEFAULT '0', "membre_id" integer NOT NULL, CONSTRAINT "REL_611ac16001cc937437afd96663" UNIQUE ("membre_id"), CONSTRAINT "CHK_ffc5ca4d841438a875466ec9e0" CHECK ("solde_bloque" >= 0), CONSTRAINT "CHK_3f53449c201a4383178b9f6095" CHECK ("solde_epargne" >= 0), CONSTRAINT "CHK_36dec6d398e3eb0cd26d81db9c" CHECK ("solde_cotisation" >= 0), CONSTRAINT "PK_c3b1514deb35ce8b0715c93bc33" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE TYPE "public"."jours_cotisation_statut_enum" AS ENUM('a_payer', 'paye', 'perdu', 'rattrape')`);
+        await queryRunner.query(`CREATE TABLE "jours_cotisation" ("id" SERIAL NOT NULL, "numero_jour" integer NOT NULL, "date_prevue" date NOT NULL, "coefficient" integer NOT NULL DEFAULT '1', "montant_du" integer NOT NULL, "montant_paye" integer NOT NULL DEFAULT '0', "statut" "public"."jours_cotisation_statut_enum" NOT NULL DEFAULT 'a_payer', "cycle_id" integer NOT NULL, CONSTRAINT "PK_726541717999148be6eedb2df74" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE UNIQUE INDEX "idx_jour_cycle_numero" ON "jours_cotisation"  ("cycle_id", "numero_jour") `);
+        await queryRunner.query(`CREATE TYPE "public"."epargnes_statut_enum" AS ENUM('active', 'retiree', 'cloturee')`);
+        await queryRunner.query(`CREATE TABLE "epargnes" ("id" SERIAL NOT NULL, "montant" integer NOT NULL DEFAULT '0', "date_echeance" date NOT NULL, "statut" "public"."epargnes_statut_enum" NOT NULL DEFAULT 'active', "membre_id" integer NOT NULL, CONSTRAINT "PK_c55ad706c420dc9fc777f70a08f" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE TABLE "retraits_epargne" ("id" SERIAL NOT NULL, "montant" integer NOT NULL, "taux_applique" numeric(5,2) NOT NULL, "montant_retenu" integer NOT NULL, "epargne_id" integer NOT NULL, "transaction_id" integer NOT NULL, CONSTRAINT "REL_d83b695d7acad2520aeb96e378" UNIQUE ("transaction_id"), CONSTRAINT "PK_8970ad632ca086e4d1b2a8d3aee" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE TYPE "public"."transactions_type_enum" AS ENUM('depot', 'retrait')`);
+        await queryRunner.query(`CREATE TYPE "public"."transactions_statut_enum" AS ENUM('en_attente', 'reussi', 'echoue')`);
+        await queryRunner.query(`CREATE TABLE "transactions" ("id" SERIAL NOT NULL, "type" "public"."transactions_type_enum" NOT NULL, "montant" integer NOT NULL, "frais_fedapay" integer NOT NULL DEFAULT '0', "reference_unique" character varying NOT NULL, "id_fedapay" character varying, "statut" "public"."transactions_statut_enum" NOT NULL DEFAULT 'en_attente', "date_operation" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "membre_id" integer NOT NULL, CONSTRAINT "UQ_7e0d5ba5fe2cd795efa90d59cb8" UNIQUE ("reference_unique"), CONSTRAINT "UQ_a8f36a2a5781601fbe4367076b3" UNIQUE ("id_fedapay"), CONSTRAINT "CHK_04291e41c0929565a77dd2e585" CHECK ("montant" > 0), CONSTRAINT "PK_a219afd8dd77ed80f5a862f1db9" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE TYPE "public"."garanties_statut_enum" AS ENUM('en_attente', 'acceptee', 'refusee', 'liberee', 'prelevee')`);
+        await queryRunner.query(`CREATE TABLE "garanties" ("id" SERIAL NOT NULL, "montant_gage" integer NOT NULL, "statut" "public"."garanties_statut_enum" NOT NULL DEFAULT 'en_attente', "pret_id" integer NOT NULL, "temoin_id" integer NOT NULL, CONSTRAINT "PK_16983c6d7ab5ce693c8e80727fe" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE UNIQUE INDEX "idx_garantie_pret_temoin" ON "garanties"  ("pret_id", "temoin_id") `);
+        await queryRunner.query(`CREATE TABLE "remboursements" ("id" SERIAL NOT NULL, "montant" integer NOT NULL, "date" date NOT NULL, "pret_id" integer NOT NULL, CONSTRAINT "PK_0ae70fa2576af0b4cababb949e2" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE TYPE "public"."prets_statut_enum" AS ENUM('demande', 'garanties_en_attente', 'accorde', 'rembourse', 'impaye', 'annule')`);
+        await queryRunner.query(`CREATE TABLE "prets" ("id" SERIAL NOT NULL, "montant_total" integer NOT NULL, "part_emprunteur" integer NOT NULL, "montant_a_rembourser" integer NOT NULL, "taux_interet" numeric(5,2), "statut" "public"."prets_statut_enum" NOT NULL DEFAULT 'demande', "date_demande" date NOT NULL, "date_octroi" date, "emprunteur_id" integer NOT NULL, CONSTRAINT "PK_7b3ed52506a57de41a677027c69" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE TYPE "public"."caisse_application_source_enum" AS ENUM('fonds_caisse', 'penalite', 'retenue_epargne', 'interet')`);
+        await queryRunner.query(`CREATE TABLE "caisse_application" ("id" SERIAL NOT NULL, "source" "public"."caisse_application_source_enum" NOT NULL, "montant" integer NOT NULL, "date" date NOT NULL, "ecriture_comptable_id" integer NOT NULL, CONSTRAINT "REL_f51b94f9b5d6b5c168d84a9365" UNIQUE ("ecriture_comptable_id"), CONSTRAINT "CHK_602b5032727f5fefd2ef00ec9c" CHECK ("montant" > 0), CONSTRAINT "PK_711af84c73100a4a97a53e84c40" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE TYPE "public"."ecritures_comptables_type_enum" AS ENUM('cotisation', 'fonds_caisse', 'retrait', 'epargne', 'retrait_epargne', 'penalite', 'retenue_epargne', 'interet', 'gage_bloque', 'gage_libere', 'gage_preleve', 'pret_octroye', 'remboursement')`);
+        await queryRunner.query(`CREATE TYPE "public"."ecritures_comptables_sens_enum" AS ENUM('credit', 'debit')`);
+        await queryRunner.query(`CREATE TABLE "ecritures_comptables" ("id" SERIAL NOT NULL, "type" "public"."ecritures_comptables_type_enum" NOT NULL, "montant" integer NOT NULL, "sens" "public"."ecritures_comptables_sens_enum" NOT NULL, "description" character varying NOT NULL, "date" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "membre_id" integer NOT NULL, "transaction_id" integer, "cycle_id" integer, "pret_id" integer, "remboursement_id" integer, CONSTRAINT "CHK_147589afb61ff326e1470757ad" CHECK (NOT ("cycle_id" IS NOT NULL AND "pret_id" IS NOT NULL)), CONSTRAINT "CHK_0ed7050e14d8d2242ca5c71edf" CHECK ("montant" > 0), CONSTRAINT "PK_d9c5bd8b51c271702b567d2a9ea" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE TYPE "public"."cycles_regularite_enum" AS ENUM('jour', 'semaine', 'mois')`);
+        await queryRunner.query(`CREATE TYPE "public"."cycles_statut_enum" AS ENUM('en_cours', 'termine')`);
+        await queryRunner.query(`CREATE TABLE "cycles" ("id" SERIAL NOT NULL, "numero" integer NOT NULL, "mise_base" integer NOT NULL, "regularite" "public"."cycles_regularite_enum" NOT NULL, "date_debut" date NOT NULL, "date_fin" date NOT NULL, "fonds_caisse_retenu" integer NOT NULL, "statut" "public"."cycles_statut_enum" NOT NULL DEFAULT 'en_cours', "souscription_id" integer NOT NULL, CONSTRAINT "PK_52e5eeb9c7c6e4ad1aed657967a" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE UNIQUE INDEX "idx_cycle_souscription_numero" ON "cycles"  ("souscription_id", "numero") `);
+        await queryRunner.query(`CREATE TYPE "public"."souscriptions_regularite_enum" AS ENUM('jour', 'semaine', 'mois')`);
+        await queryRunner.query(`CREATE TYPE "public"."souscriptions_prochaine_regularite_enum" AS ENUM('jour', 'semaine', 'mois')`);
+        await queryRunner.query(`CREATE TYPE "public"."souscriptions_statut_enum" AS ENUM('active', 'cloturee')`);
+        await queryRunner.query(`CREATE TABLE "souscriptions" ("id" SERIAL NOT NULL, "mise_base" integer NOT NULL, "regularite" "public"."souscriptions_regularite_enum" NOT NULL, "prochaine_mise_base" integer, "prochaine_regularite" "public"."souscriptions_prochaine_regularite_enum", "date_demarrage" date NOT NULL, "statut" "public"."souscriptions_statut_enum" NOT NULL DEFAULT 'active', "membre_id" integer NOT NULL, CONSTRAINT "PK_a8a84f9a2260307890857633655" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE UNIQUE INDEX "idx_souscription_active_unique" ON "souscriptions"  ("membre_id") WHERE statut = 'active'`);
+        await queryRunner.query(`CREATE TYPE "public"."notifications_type_enum" AS ENUM('rappel_paiement', 'retrait_effectue')`);
+        await queryRunner.query(`CREATE TABLE "notifications" ("id" SERIAL NOT NULL, "type" "public"."notifications_type_enum" NOT NULL, "message" text NOT NULL, "lue" boolean NOT NULL DEFAULT false, "date" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "membre_id" integer NOT NULL, CONSTRAINT "PK_6a72c3c0f683f6462415e653c3a" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE TYPE "public"."membres_role_enum" AS ENUM('membre', 'admin')`);
+        await queryRunner.query(`CREATE TYPE "public"."membres_statut_enum" AS ENUM('actif', 'suspendu', 'cloture')`);
+        await queryRunner.query(`CREATE TABLE "membres" ("id" SERIAL NOT NULL, "nom" character varying(100) NOT NULL, "phone" character varying(20) NOT NULL, "password" character varying NOT NULL, "code_retrait" character varying, "role" "public"."membres_role_enum" NOT NULL DEFAULT 'membre', "statut" "public"."membres_statut_enum" NOT NULL DEFAULT 'actif', "date_inscription" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "UQ_4fb133b812f49c37bc48da82f8b" UNIQUE ("phone"), CONSTRAINT "PK_4fbbfa09869427fbc281d469e9f" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE TABLE "parametres_systeme" ("cle" character varying NOT NULL, "valeur" character varying NOT NULL, "description" character varying, CONSTRAINT "PK_65b1e738c8c19c81eb8add4edf0" PRIMARY KEY ("cle"))`);
+        await queryRunner.query(`CREATE TABLE "webhooks_fedapay" ("id" SERIAL NOT NULL, "evenement" character varying NOT NULL, "payload" jsonb NOT NULL, "traite" boolean NOT NULL DEFAULT false, "date" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_c32a2f0ceee690727dfaaabdcc7" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`ALTER TABLE "portefeuilles" ADD CONSTRAINT "FK_611ac16001cc937437afd966638" FOREIGN KEY ("membre_id") REFERENCES "membres"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "jours_cotisation" ADD CONSTRAINT "FK_b47b66e2f7e44ac59cadc453361" FOREIGN KEY ("cycle_id") REFERENCES "cycles"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "epargnes" ADD CONSTRAINT "FK_5cea06cbddb18af13febc150df6" FOREIGN KEY ("membre_id") REFERENCES "membres"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "retraits_epargne" ADD CONSTRAINT "FK_cce68c955ab6c35439608cd7435" FOREIGN KEY ("epargne_id") REFERENCES "epargnes"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "retraits_epargne" ADD CONSTRAINT "FK_d83b695d7acad2520aeb96e3783" FOREIGN KEY ("transaction_id") REFERENCES "transactions"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "transactions" ADD CONSTRAINT "FK_52f6a656e1021948512160ed7be" FOREIGN KEY ("membre_id") REFERENCES "membres"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "garanties" ADD CONSTRAINT "FK_df44f666a5e13f6d5ebced95bab" FOREIGN KEY ("pret_id") REFERENCES "prets"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "garanties" ADD CONSTRAINT "FK_e02fb2f570e8ceafabc36ac0ea1" FOREIGN KEY ("temoin_id") REFERENCES "membres"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "remboursements" ADD CONSTRAINT "FK_66b40d36ca63aeecffe05e163ec" FOREIGN KEY ("pret_id") REFERENCES "prets"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "prets" ADD CONSTRAINT "FK_a637c188bf49c2f0464cdd3eb59" FOREIGN KEY ("emprunteur_id") REFERENCES "membres"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "caisse_application" ADD CONSTRAINT "FK_f51b94f9b5d6b5c168d84a9365d" FOREIGN KEY ("ecriture_comptable_id") REFERENCES "ecritures_comptables"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "ecritures_comptables" ADD CONSTRAINT "FK_5093aded2a44497ffb7371ce81c" FOREIGN KEY ("membre_id") REFERENCES "membres"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "ecritures_comptables" ADD CONSTRAINT "FK_cbd715e977a3efb1e6015a757e2" FOREIGN KEY ("transaction_id") REFERENCES "transactions"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "ecritures_comptables" ADD CONSTRAINT "FK_998245e9b2ad39c4b3c7bce8925" FOREIGN KEY ("cycle_id") REFERENCES "cycles"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "ecritures_comptables" ADD CONSTRAINT "FK_e0a70855517d77c4fd5595e71a7" FOREIGN KEY ("pret_id") REFERENCES "prets"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "ecritures_comptables" ADD CONSTRAINT "FK_cab333b4210989d4fe44bff26d2" FOREIGN KEY ("remboursement_id") REFERENCES "remboursements"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "cycles" ADD CONSTRAINT "FK_c7442c826e3f316bd8f760f0580" FOREIGN KEY ("souscription_id") REFERENCES "souscriptions"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "souscriptions" ADD CONSTRAINT "FK_ff2d8abfd1320763c9df7c8b803" FOREIGN KEY ("membre_id") REFERENCES "membres"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+        await queryRunner.query(`ALTER TABLE "notifications" ADD CONSTRAINT "FK_9d3c5f4cba986236e16c631384b" FOREIGN KEY ("membre_id") REFERENCES "membres"("id") ON DELETE RESTRICT ON UPDATE NO ACTION`);
+    }
+
+    public async down(queryRunner: QueryRunner): Promise<void> {
+        await queryRunner.query(`ALTER TABLE "notifications" DROP CONSTRAINT "FK_9d3c5f4cba986236e16c631384b"`);
+        await queryRunner.query(`ALTER TABLE "souscriptions" DROP CONSTRAINT "FK_ff2d8abfd1320763c9df7c8b803"`);
+        await queryRunner.query(`ALTER TABLE "cycles" DROP CONSTRAINT "FK_c7442c826e3f316bd8f760f0580"`);
+        await queryRunner.query(`ALTER TABLE "ecritures_comptables" DROP CONSTRAINT "FK_cab333b4210989d4fe44bff26d2"`);
+        await queryRunner.query(`ALTER TABLE "ecritures_comptables" DROP CONSTRAINT "FK_e0a70855517d77c4fd5595e71a7"`);
+        await queryRunner.query(`ALTER TABLE "ecritures_comptables" DROP CONSTRAINT "FK_998245e9b2ad39c4b3c7bce8925"`);
+        await queryRunner.query(`ALTER TABLE "ecritures_comptables" DROP CONSTRAINT "FK_cbd715e977a3efb1e6015a757e2"`);
+        await queryRunner.query(`ALTER TABLE "ecritures_comptables" DROP CONSTRAINT "FK_5093aded2a44497ffb7371ce81c"`);
+        await queryRunner.query(`ALTER TABLE "caisse_application" DROP CONSTRAINT "FK_f51b94f9b5d6b5c168d84a9365d"`);
+        await queryRunner.query(`ALTER TABLE "prets" DROP CONSTRAINT "FK_a637c188bf49c2f0464cdd3eb59"`);
+        await queryRunner.query(`ALTER TABLE "remboursements" DROP CONSTRAINT "FK_66b40d36ca63aeecffe05e163ec"`);
+        await queryRunner.query(`ALTER TABLE "garanties" DROP CONSTRAINT "FK_e02fb2f570e8ceafabc36ac0ea1"`);
+        await queryRunner.query(`ALTER TABLE "garanties" DROP CONSTRAINT "FK_df44f666a5e13f6d5ebced95bab"`);
+        await queryRunner.query(`ALTER TABLE "transactions" DROP CONSTRAINT "FK_52f6a656e1021948512160ed7be"`);
+        await queryRunner.query(`ALTER TABLE "retraits_epargne" DROP CONSTRAINT "FK_d83b695d7acad2520aeb96e3783"`);
+        await queryRunner.query(`ALTER TABLE "retraits_epargne" DROP CONSTRAINT "FK_cce68c955ab6c35439608cd7435"`);
+        await queryRunner.query(`ALTER TABLE "epargnes" DROP CONSTRAINT "FK_5cea06cbddb18af13febc150df6"`);
+        await queryRunner.query(`ALTER TABLE "jours_cotisation" DROP CONSTRAINT "FK_b47b66e2f7e44ac59cadc453361"`);
+        await queryRunner.query(`ALTER TABLE "portefeuilles" DROP CONSTRAINT "FK_611ac16001cc937437afd966638"`);
+        await queryRunner.query(`DROP TABLE "webhooks_fedapay"`);
+        await queryRunner.query(`DROP TABLE "parametres_systeme"`);
+        await queryRunner.query(`DROP TABLE "membres"`);
+        await queryRunner.query(`DROP TYPE "public"."membres_statut_enum"`);
+        await queryRunner.query(`DROP TYPE "public"."membres_role_enum"`);
+        await queryRunner.query(`DROP TABLE "notifications"`);
+        await queryRunner.query(`DROP TYPE "public"."notifications_type_enum"`);
+        await queryRunner.query(`DROP INDEX "public"."idx_souscription_active_unique"`);
+        await queryRunner.query(`DROP TABLE "souscriptions"`);
+        await queryRunner.query(`DROP TYPE "public"."souscriptions_statut_enum"`);
+        await queryRunner.query(`DROP TYPE "public"."souscriptions_prochaine_regularite_enum"`);
+        await queryRunner.query(`DROP TYPE "public"."souscriptions_regularite_enum"`);
+        await queryRunner.query(`DROP INDEX "public"."idx_cycle_souscription_numero"`);
+        await queryRunner.query(`DROP TABLE "cycles"`);
+        await queryRunner.query(`DROP TYPE "public"."cycles_statut_enum"`);
+        await queryRunner.query(`DROP TYPE "public"."cycles_regularite_enum"`);
+        await queryRunner.query(`DROP TABLE "ecritures_comptables"`);
+        await queryRunner.query(`DROP TYPE "public"."ecritures_comptables_sens_enum"`);
+        await queryRunner.query(`DROP TYPE "public"."ecritures_comptables_type_enum"`);
+        await queryRunner.query(`DROP TABLE "caisse_application"`);
+        await queryRunner.query(`DROP TYPE "public"."caisse_application_source_enum"`);
+        await queryRunner.query(`DROP TABLE "prets"`);
+        await queryRunner.query(`DROP TYPE "public"."prets_statut_enum"`);
+        await queryRunner.query(`DROP TABLE "remboursements"`);
+        await queryRunner.query(`DROP INDEX "public"."idx_garantie_pret_temoin"`);
+        await queryRunner.query(`DROP TABLE "garanties"`);
+        await queryRunner.query(`DROP TYPE "public"."garanties_statut_enum"`);
+        await queryRunner.query(`DROP TABLE "transactions"`);
+        await queryRunner.query(`DROP TYPE "public"."transactions_statut_enum"`);
+        await queryRunner.query(`DROP TYPE "public"."transactions_type_enum"`);
+        await queryRunner.query(`DROP TABLE "retraits_epargne"`);
+        await queryRunner.query(`DROP TABLE "epargnes"`);
+        await queryRunner.query(`DROP TYPE "public"."epargnes_statut_enum"`);
+        await queryRunner.query(`DROP INDEX "public"."idx_jour_cycle_numero"`);
+        await queryRunner.query(`DROP TABLE "jours_cotisation"`);
+        await queryRunner.query(`DROP TYPE "public"."jours_cotisation_statut_enum"`);
+        await queryRunner.query(`DROP TABLE "portefeuilles"`);
+    }
+
+}

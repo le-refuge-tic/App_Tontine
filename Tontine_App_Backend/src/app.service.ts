@@ -2,7 +2,8 @@ import { Injectable } from '@nestjs/common';
 
 @Injectable()
 export class AppService {
-  getHello(): string {
-    return 'Hello World!';
+  /** Indique que l'application est démarrée et répond. */
+  getHealth(): { status: string } {
+    return { status: 'ok' };
   }
 }
