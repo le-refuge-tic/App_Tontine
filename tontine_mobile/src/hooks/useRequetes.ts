@@ -82,7 +82,7 @@ export function useInvaliderDonnees() {
 export function useCreerSouscription() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (params: { miseBase: number; regularite: Regularite; dateDemarrage: string }) =>
+    mutationFn: (params: { miseBase: number; regularite: Regularite }) =>
       souscriptions.creerSouscription(params),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: clesRequetes.souscriptionActive });

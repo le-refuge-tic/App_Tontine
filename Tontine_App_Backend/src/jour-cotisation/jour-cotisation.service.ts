@@ -1,17 +1,27 @@
-import { Injectable, NotFoundException, NotImplementedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { JourCotisation } from './entities/jour-cotisation.entity';
+import { StatutJourCotisation } from '../common/enums';
 import { CreateJourCotisationDto } from './dto/create-jour-cotisation.dto';
 import { UpdateJourCotisationDto } from './dto/update-jour-cotisation.dto';
 
 @Injectable()
 export class JourCotisationService {
-  constructor(@InjectRepository(JourCotisation) private readonly repo: Repository<JourCotisation>) {}
+  constructor(
+    @InjectRepository(JourCotisation)
+    private readonly repo: Repository<JourCotisation>,
+  ) {}
 
   findAll(membreId?: number): Promise<JourCotisation[]> {
     return membreId !== undefined
-      ? this.repo.find({ where: { cycle: { souscription: { membre: { id: membreId } } } } })
+      ? this.repo.find({
+          where: { cycle: { souscription: { membre: { id: membreId } } } },
+        })
       : this.repo.find();
   }
 
@@ -20,8 +30,12 @@ export class JourCotisationService {
       where: { id },
       relations: { cycle: { souscription: { membre: true } } },
     });
-    if (!jour) throw new NotFoundException(`Jour de cotisation introuvable : ${id}.`);
-    if (membreId !== undefined && jour.cycle.souscription.membre.id !== membreId) {
+    if (!jour)
+      throw new NotFoundException(`Jour de cotisation introuvable : ${id}.`);
+    if (
+      membreId !== undefined &&
+      jour.cycle.souscription.membre.id !== membreId
+    ) {
       throw new NotFoundException(`Jour de cotisation introuvable : ${id}.`);
     }
     return jour;
@@ -39,7 +53,11 @@ export class JourCotisationService {
     return this.repo.save(jour);
   }
 
-  async update(id: number, dto: UpdateJourCotisationDto, membreId?: number): Promise<JourCotisation> {
+  async update(
+    id: number,
+    dto: UpdateJourCotisationDto,
+    membreId?: number,
+  ): Promise<JourCotisation> {
     await this.findOne(id, membreId);
     await this.repo.update(id, dto);
     return this.findOne(id);
@@ -50,7 +68,38 @@ export class JourCotisationService {
     await this.repo.delete(id);
   }
 
-  async marquerPaye(jourId: number, montant: number): Promise<void> {
-    throw new NotImplementedException();
+  /**
+   * Marque un jour de cotisation comme (partiellement ou totalement) payé.
+   *
+   * - Ajoute `montant` à `montantPaye`.
+   * - Passe le statut à « payé » dès que `montantPaye >= montantDu`.
+   * - Refuse un jour déjà payé (pas de double paiement).
+   * - Refuse un montant nul ou négatif.
+   *
+   * TODO(decision) : paiement partiel d'un jour. Pour l'instant on autorise
+   * l'accumulation de paiements partiels (montantPaye augmente jusqu'à
+   * montantDu). À confirmer : doit-on exiger le règlement intégral d'un jour
+   * en une seule fois ?
+   */
+  async marquerPaye(jourId: number, montant: number): Promise<JourCotisation> {
+    if (montant <= 0) {
+      throw new BadRequestException(
+        'Le montant du paiement doit être strictement positif.',
+      );
+    }
+    const jour = await this.repo.findOne({ where: { id: jourId } });
+    if (!jour)
+      throw new NotFoundException(
+        `Jour de cotisation introuvable : ${jourId}.`,
+      );
+    if (jour.statut === StatutJourCotisation.PAYE) {
+      throw new BadRequestException('Ce jour de cotisation est déjà payé.');
+    }
+
+    jour.montantPaye += montant;
+    if (jour.montantPaye >= jour.montantDu) {
+      jour.statut = StatutJourCotisation.PAYE;
+    }
+    return this.repo.save(jour);
   }
 }

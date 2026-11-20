@@ -115,7 +115,11 @@ export default function Accueil() {
           </Carte>
         ) : cycle.data && cycle.data.jours.length > 0 ? (
           <Carte>
-            <CarnetDuMois jours={cycle.data.jours} />
+            <CarnetDuMois
+                jours={cycle.data.jours}
+                dateDebut={cycle.data.dateDebut}
+                dateFin={cycle.data.dateFin}
+              />
           </Carte>
         ) : cycle.data ? (
           <Carte>

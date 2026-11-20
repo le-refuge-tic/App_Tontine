@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import configuration, { DbConfig } from './config/configuration';
 import { validationSchema } from './config/validation.schema';
 import { buildDataSourceOptions } from './config/typeorm.config';
@@ -61,6 +62,7 @@ const DEFAULT_DB: DbConfig = {
         ],
       }),
     }),
+    ScheduleModule.forRoot(),
     AuthModule,
     JetonRafraichissementModule,
     MembreModule,

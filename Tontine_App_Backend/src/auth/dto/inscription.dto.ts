@@ -13,8 +13,8 @@ export class InscriptionDto {
   nom!: string;
 
   @ApiProperty({
-    example: '97000000',
-    description: 'Numéro de téléphone (8 à 15 chiffres, espaces/+/tirets autorisés).',
+    example: '0197000000',
+    description: 'Numéro béninois : 10 chiffres locaux (0197000000) ou 13 avec préfixe (2290197000000).',
   })
   @IsString()
   @Matches(/^[\d\s+\-]{8,20}$/, {

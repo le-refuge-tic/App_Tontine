@@ -1,0 +1,4 @@
+# Normalisation des fins de ligne pour tout le dépôt.
+# Git stocke LF en index et restitue le format natif (CRLF sous Windows)
+# au checkout, évitant les conflits CRLF/LF entre les contributeurs.
+* text=auto

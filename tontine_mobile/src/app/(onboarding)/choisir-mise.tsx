@@ -11,7 +11,6 @@ import { useToast } from "@/components/Toast";
 import { theme } from "@/theme";
 import { MISE_MINIMALE, PAS_MISE, PUCES_MISE } from "@/constants/app";
 import { formaterFCFA } from "@/utils/formaterFCFA";
-import { dateJourBeninISO } from "@/utils/dates";
 import { useCreerSouscription } from "@/hooks/useRequetes";
 import { ErreurApi } from "@/api";
 import type { Regularite } from "@/api/types";
@@ -37,7 +36,7 @@ export default function ChoisirMise() {
   const commencer = async () => {
     if (!miseValide) return;
     try {
-      await creer.mutateAsync({ miseBase: mise, regularite, dateDemarrage: dateJourBeninISO() });
+      await creer.mutateAsync({ miseBase: mise, regularite });
       hapticSucces();
       // Ne pas naviguer ici : GateNavigation détecte la nouvelle souscription
       // dès que useEtatSouscription repasse à "oui" et redirige vers l'accueil.

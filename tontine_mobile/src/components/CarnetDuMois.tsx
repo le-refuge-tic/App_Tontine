@@ -8,6 +8,13 @@ import type { JourCotisation } from "@/api/types";
 
 interface Props {
   jours: JourCotisation[];
+  /**
+   * Premier jour du cycle (AAAA-MM-JJ). Avec dateFin, permet d'afficher
+   * tous les jours calendaires du mois en grisé hors-cycle.
+   */
+  dateDebut?: string;
+  /** Dernier jour du cycle (AAAA-MM-JJ). */
+  dateFin?: string;
   /** Mode rattrapage : les jours perdus / à payer passés deviennent sélectionnables. */
   modeSelection?: boolean;
   /** Identifiants des jours sélectionnés pour le rattrapage. */
@@ -17,16 +24,90 @@ interface Props {
 
 const GAP = 8;
 
-export function CarnetDuMois({ jours, modeSelection = false, joursSelectionnes = [], onToggleJour }: Props) {
+/** Nombre de jours dans le mois d'une date AAAA-MM-JJ. */
+function joursParMois(dateISO: string): number {
+  const [annee, mois] = dateISO.split("-").map(Number);
+  return new Date(annee!, mois!, 0).getDate();
+}
+
+/** Extrait le numéro de jour (1-31) depuis une date AAAA-MM-JJ. */
+function jourDuMois(dateISO: string): number {
+  return parseInt(dateISO.split("-")[2]!, 10);
+}
+
+/**
+ * Représentation interne d'une case de la grille.
+ * - type "cycle"    : jour appartenant au cycle, possède toutes les données JourCotisation.
+ * - type "horsCycle": jour calendaire hors du cycle, affiché en gris.
+ */
+type Case =
+  | { type: "cycle"; jour: JourCotisation }
+  | { type: "horsCycle"; numeroJour: number };
+
+export function CarnetDuMois({
+  jours,
+  dateDebut,
+  dateFin,
+  modeSelection = false,
+  joursSelectionnes = [],
+  onToggleJour,
+}: Props) {
   const [largeur, setLargeur] = useState(0);
   const aujourdhui = dateJourBeninISO();
   const cellule = Math.max(0, Math.floor((largeur - 6 * GAP) / 7));
   const tries = new Set(joursSelectionnes);
 
+  // Construction de la grille : jours hors-cycle + jours du cycle.
+  const cases: Case[] = (() => {
+    if (!dateDebut || !dateFin) {
+      // Pas de dates fournies : on affiche uniquement les jours du cycle (ancien comportement).
+      return jours.map((j): Case => ({ type: "cycle", jour: j }));
+    }
+
+    const totalJours = joursParMois(dateDebut);
+    const premierJourCycle = jourDuMois(dateDebut);
+    const dernierJourCycle = jourDuMois(dateFin);
+
+    // Index des jours du cycle par leur numéro de jour dans le mois.
+    const jourParNumero = new Map<number, JourCotisation>();
+    for (const j of jours) {
+      jourParNumero.set(j.numeroJour, j);
+    }
+
+    const resultat: Case[] = [];
+    for (let n = 1; n <= totalJours; n++) {
+      const dansLeCycle = n >= premierJourCycle && n <= dernierJourCycle;
+      if (dansLeCycle) {
+        const jour = jourParNumero.get(n);
+        if (jour) {
+          resultat.push({ type: "cycle", jour });
+        } else {
+          // Jour dans la plage mais sans données (ne devrait pas arriver) : hors-cycle.
+          resultat.push({ type: "horsCycle", numeroJour: n });
+        }
+      } else {
+        resultat.push({ type: "horsCycle", numeroJour: n });
+      }
+    }
+    return resultat;
+  })();
+
+  const aDesHorsCycle = cases.some((c) => c.type === "horsCycle");
+
   return (
     <View onLayout={(e) => setLargeur(e.nativeEvent.layout.width)}>
       <View style={[styles.grille, largeur ? null : styles.cache]}>
-        {jours.map((jour) => {
+        {cases.map((c, i) => {
+          if (c.type === "horsCycle") {
+            return (
+              <CelluleHorsCycle
+                key={`hors-${c.numeroJour}`}
+                numeroJour={c.numeroJour}
+                taille={cellule}
+              />
+            );
+          }
+          const jour = c.jour;
           const estAujourdhui = jour.datePrevue === aujourdhui;
           const selectionne = modeSelection && tries.has(jour.id);
           const selectionnable = modeSelection && jourSelectionnable(jour, aujourdhui);
@@ -43,7 +124,7 @@ export function CarnetDuMois({ jours, modeSelection = false, joursSelectionnes =
           );
         })}
       </View>
-      <Legende />
+      <Legende avecHorsCycle={aDesHorsCycle} />
     </View>
   );
 }
@@ -53,6 +134,31 @@ function jourSelectionnable(jour: JourCotisation, aujourdhui: string): boolean {
   if (jour.statut === "a_payer" && jour.datePrevue < aujourdhui) return true;
   return false;
 }
+
+// ── Cellule hors-cycle ─────────────────────────────────────────────────────
+
+function CelluleHorsCycle({ numeroJour, taille }: { numeroJour: number; taille: number }) {
+  return (
+    <View style={{ width: taille, height: taille }}>
+      <View
+        style={[
+          styles.cellule,
+          {
+            backgroundColor: theme.couleurs.grisPerdu,
+            borderColor: theme.couleurs.grisPerdu,
+            borderWidth: 1,
+          },
+        ]}
+      >
+        <Text style={[theme.typographie.corpsMedium, { color: "#FFFFFF" }]}>
+          {numeroJour}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+// ── Cellule du cycle ───────────────────────────────────────────────────────
 
 interface PropsCellule {
   jour: JourCotisation;
@@ -71,7 +177,6 @@ function Cellule({ jour, taille, estAujourdhui, selectionne, selectionnable, onA
   let texteCouleur: string = c.texteSecondaire;
   let avecCoche = false;
   let avecBarre = false;
-  let avecPoint = false;
 
   if (selectionne) {
     fond = c.primaireTresClair;
@@ -105,7 +210,6 @@ function Cellule({ jour, taille, estAujourdhui, selectionne, selectionnable, onA
           bordure = c.primaire;
           bordureWidth = 2;
           texteCouleur = c.primaire;
-          avecPoint = true;
         } else {
           bordure = c.bordure;
           texteCouleur = c.texteSecondaire;
@@ -128,7 +232,6 @@ function Cellule({ jour, taille, estAujourdhui, selectionne, selectionnable, onA
           <Text style={[theme.typographie.corpsMedium, { color: texteCouleur }]}>{jour.numeroJour}</Text>
         )}
         {avecBarre ? <View style={styles.barreCellule} /> : null}
-        {avecPoint ? <View style={[styles.pointBas, { backgroundColor: c.primaire }]} /> : null}
       </View>
       {jour.coefficient > 1 ? (
         <View style={styles.badge} pointerEvents="none">
@@ -139,19 +242,33 @@ function Cellule({ jour, taille, estAujourdhui, selectionne, selectionnable, onA
   );
 }
 
-function Legende() {
-  const items: { couleur: string; libelle: string }[] = [
+// ── Légende ────────────────────────────────────────────────────────────────
+
+function Legende({ avecHorsCycle }: { avecHorsCycle: boolean }) {
+  const items: { couleur: string; libelle: string; contour?: boolean }[] = [
     { couleur: theme.couleurs.primaire, libelle: "Payé" },
     { couleur: theme.couleurs.primaireTresClair, libelle: "Rattrapé" },
-    { couleur: theme.couleurs.bordure, libelle: "À payer" },
-    { couleur: theme.couleurs.primaire, libelle: "Aujourd'hui" },
+    { couleur: theme.couleurs.bordure, libelle: "À payer", contour: true },
+    { couleur: theme.couleurs.primaire, libelle: "Aujourd'hui", contour: true },
     { couleur: theme.couleurs.grisPerdu, libelle: "Perdu" },
   ];
+  if (avecHorsCycle) {
+    items.push({ couleur: theme.couleurs.grisPerdu, libelle: "Hors cycle" });
+  }
   return (
     <View style={styles.legende}>
       {items.map((it, i) => (
         <View key={i} style={styles.legendeItem}>
-          <View style={[styles.legendePoint, { backgroundColor: it.couleur }]} />
+          <View
+            style={[
+              styles.legendePoint,
+              {
+                backgroundColor: it.contour ? "transparent" : it.couleur,
+                borderColor: it.couleur,
+                borderWidth: it.contour ? 1.5 : 0,
+              },
+            ]}
+          />
           <Text style={[theme.typographie.legende2, { color: theme.couleurs.texteSecondaire }]}>{it.libelle}</Text>
         </View>
       ))}
@@ -183,13 +300,6 @@ const styles = StyleSheet.create({
     height: 1.5,
     backgroundColor: theme.couleurs.grisPerdu,
     borderRadius: 999,
-  },
-  pointBas: {
-    position: "absolute",
-    bottom: 5,
-    width: 4,
-    height: 4,
-    borderRadius: 2,
   },
   badge: {
     position: "absolute",

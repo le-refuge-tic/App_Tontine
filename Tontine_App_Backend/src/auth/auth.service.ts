@@ -27,9 +27,34 @@ import { DefinirCodeRetraitDto } from './dto/definir-code-retrait.dto';
 const HASH_FACTICE =
   '$2b$12$invalidhashfacticeXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
 
-/** Normalise un numéro de téléphone : supprime espaces, '+' et tirets. */
+/** Préfixe téléphonique du Bénin. */
+const PREFIXE_BENIN = '229';
+/** Longueur d'un numéro local béninois (sans préfixe). */
+const LONGUEUR_LOCALE = 10;
+
+/**
+ * Normalise un numéro de téléphone vers le format de stockage : 229 + 10 chiffres.
+ * Accepte :
+ *   - 10 chiffres locaux          (0197000000)
+ *   - 13 chiffres avec préfixe    (2290197000000)
+ *   - Formats avec +, espaces, tirets (nettoyés automatiquement)
+ * Pour tout autre longueur les chiffres bruts sont retournés tels quels
+ * (rétro-compatibilité Swagger / anciens comptes).
+ */
 export function normaliserPhone(phone: string): string {
-  return phone.replace(/[\s+\-]/g, '');
+  const chiffres = phone.replace(/[\s+\-]/g, '');
+  if (chiffres.length === LONGUEUR_LOCALE) {
+    return `${PREFIXE_BENIN}${chiffres}`;
+  }
+  if (
+    chiffres.length === PREFIXE_BENIN.length + LONGUEUR_LOCALE &&
+    chiffres.startsWith(PREFIXE_BENIN)
+  ) {
+    return chiffres;
+  }
+  // Longueur inattendue : on renvoie les chiffres bruts pour ne pas
+  // rejeter des comptes créés en dehors du format standard.
+  return chiffres;
 }
 
 export interface TokenPair {

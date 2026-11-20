@@ -1,11 +1,26 @@
-import { Injectable, NotFoundException, NotImplementedException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Portefeuille } from './entities/portefeuille.entity';
+import { EcritureComptable } from '../ecriture-comptable/entities/ecriture-comptable.entity';
+import { TypeEcriture } from '../common/enums';
+
+export interface PortefeuilleVue {
+  soldeCotisation: number;
+  soldeEpargne: number;
+  soldeBloque: number;
+  fondsCaisseRetenu: number;
+  retirable: number;
+}
 
 @Injectable()
 export class PortefeuilleService {
-  constructor(@InjectRepository(Portefeuille) private readonly repo: Repository<Portefeuille>) {}
+  constructor(
+    @InjectRepository(Portefeuille)
+    private readonly repo: Repository<Portefeuille>,
+    @InjectRepository(EcritureComptable)
+    private readonly ecritureRepo: Repository<EcritureComptable>,
+  ) {}
 
   findAll(membreId?: number): Promise<Portefeuille[]> {
     return membreId !== undefined
@@ -14,7 +29,10 @@ export class PortefeuilleService {
   }
 
   async findOne(id: number, membreId?: number): Promise<Portefeuille> {
-    const p = await this.repo.findOne({ where: { id }, relations: { membre: true } });
+    const p = await this.repo.findOne({
+      where: { id },
+      relations: { membre: true },
+    });
     if (!p) throw new NotFoundException(`Portefeuille introuvable : ${id}.`);
     if (membreId !== undefined && p.membre.id !== membreId) {
       throw new NotFoundException(`Portefeuille introuvable : ${id}.`);
@@ -22,7 +40,53 @@ export class PortefeuilleService {
     return p;
   }
 
+  /**
+   * Vue du portefeuille du membre connecté.
+   *  - `fondsCaisseRetenu` = somme des écritures `fonds_caisse` du membre
+   *    (montant réellement retenu, 0 tant qu'aucun dépôt n'a eu lieu).
+   *  - `retirable` = max(0, soldeCotisation − fondsCaisseRetenu − soldeBloque).
+   *
+   * Sans aucune écriture, tout vaut 0 sans erreur.
+   */
+  async trouverMoi(membreId: number): Promise<PortefeuilleVue> {
+    const portefeuille = await this.repo.findOne({
+      where: { membre: { id: membreId } },
+    });
+    if (!portefeuille) {
+      throw new NotFoundException('Portefeuille introuvable.');
+    }
+
+    const fondsCaisseRetenu = await this.fondsCaisseRetenuDuMembre(membreId);
+    const retirable = Math.max(
+      0,
+      portefeuille.soldeCotisation -
+        fondsCaisseRetenu -
+        portefeuille.soldeBloque,
+    );
+
+    return {
+      soldeCotisation: portefeuille.soldeCotisation,
+      soldeEpargne: portefeuille.soldeEpargne,
+      soldeBloque: portefeuille.soldeBloque,
+      fondsCaisseRetenu,
+      retirable,
+    };
+  }
+
+  /** Somme des montants des écritures `fonds_caisse` du membre (retenu réel). */
+  async fondsCaisseRetenuDuMembre(membreId: number): Promise<number> {
+    const resultat = await this.ecritureRepo
+      .createQueryBuilder('e')
+      .select('COALESCE(SUM(e.montant), 0)', 'total')
+      .where('e.membre_id = :membreId', { membreId })
+      .andWhere('e.type = :type', { type: TypeEcriture.FONDS_CAISSE })
+      .getRawOne<{ total: string }>();
+    return Number(resultat?.total ?? 0);
+  }
+
+  /** Alias `retirableDuMois` demandé par le contexte (= retirable calculé). */
   async retirableDuMois(membreId: number): Promise<number> {
-    throw new NotImplementedException();
+    const vue = await this.trouverMoi(membreId);
+    return vue.retirable;
   }
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { theme } from "@/theme";
 import { hapticSelection } from "@/utils/haptics";
 
@@ -24,7 +24,7 @@ export function ControleSegmente({ options, valeur, onChange, style_wrapper }: P
 
   const gauche = useSharedValue(0);
   useEffect(() => {
-    gauche.value = withSpring(index * segmentLargeur, { damping: 22, stiffness: 220 });
+    gauche.value = withTiming(index * segmentLargeur, { duration: 220, easing: Easing.out(Easing.cubic) });
   }, [index, segmentLargeur, gauche]);
   const indic = useAnimatedStyle(() => ({ transform: [{ translateX: gauche.value }] }));
 

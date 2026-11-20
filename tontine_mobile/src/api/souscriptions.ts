@@ -19,15 +19,12 @@ export async function obtenirSouscriptionActive(): Promise<Souscription | null> 
 }
 
 /**
- * POST /souscriptions — crée la souscription.
- * TODO(backend) : le DTO exige `membreId` en entrée bien que le contrôleur le
- * force depuis le jeton. On envoie 0 comme placeholder (le serveur ignore /
- * remplace cette valeur pour un membre).
+ * POST /souscriptions — crée la souscription pour le membre connecté.
+ * Le serveur déduit le membre depuis le jeton JWT.
  */
 export async function creerSouscription(params: {
   miseBase: number;
   regularite: Regularite;
-  dateDemarrage: string;
 }): Promise<Souscription> {
   if (EST_MODE_DEMO) {
     await delaiDemo();
@@ -35,6 +32,6 @@ export async function creerSouscription(params: {
   }
   return requete<Souscription>("/souscriptions", {
     method: "POST",
-    body: { membreId: 0, ...params },
+    body: { miseBase: params.miseBase, regularite: params.regularite },
   });
 }

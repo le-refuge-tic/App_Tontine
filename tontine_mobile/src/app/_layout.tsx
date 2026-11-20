@@ -65,16 +65,18 @@ function RacineApp() {
   const { etatSession } = useAuth();
   const etatSouscription = useEtatSouscription();
 
-  // "prêt" : vrai dès que session connue + souscription connue (ou déconnecté).
+  // "prêt" : vrai dès qu'on sait où rediriger l'utilisateur.
+  //   - Déconnecté : dès que etatSession est connu (pas besoin de la souscription).
+  //   - Connecté   : quand la souscription est aussi connue (oui / non).
   // Une fois passé à true, ne repasse JAMAIS à false.
   const [splashCaché, setSplashCaché] = useState(false);
   const [depasse, setDepasse] = useState(false);
   // Ref pour s'assurer qu'on n'appelle hideAsync qu'une seule fois.
   const hideCalledRef = useRef(false);
 
-  // Délai de 6 s pour débloquer même si la souscription tarde.
+  // Délai de 6 s : déblocage de secours si la souscription ne répond pas.
   useEffect(() => {
-    if (etatSession === "chargement") return;
+    if (etatSession !== "connecte") return;
     const t = setTimeout(() => setDepasse(true), 6000);
     return () => clearTimeout(t);
   }, [etatSession]);
@@ -190,16 +192,15 @@ const stylesAttente = StyleSheet.create({
 
 /** Portail de redirection selon l'authentification et la souscription active. */
 function GateNavigation() {
-  const { etatSession } = useAuth();
+  const { etatSession, membre } = useAuth();
   const etatSouscription = useEtatSouscription();
   const segments = useSegments();
 
   const estAuthentifie = etatSession === "connecte";
+  const estAdmin = membre?.role === "admin";
 
   useEffect(() => {
     if (etatSession === "chargement") return;
-    // Ne pas rediriger pendant un refetch de la souscription :
-    // useEtatSouscription retourne déjà "inconnu" dans ce cas.
     if (etatSouscription === "inconnu") return;
 
     const segment0 = segments[0] as string | undefined;
@@ -209,13 +210,19 @@ function GateNavigation() {
       if (!dansAuth) router.replace("/bienvenue");
       return;
     }
+    // L'admin n'a pas de souscription : on le laisse sur l'accueil
+    // sans jamais le renvoyer vers choisir-mise.
+    if (estAdmin) {
+      if (dansAuth || segment0 === "(onboarding)") router.replace("/");
+      return;
+    }
     if (etatSouscription === "non") {
       const dansOnboarding = segment0 === "(onboarding)";
       if (!dansOnboarding) router.replace("/choisir-mise");
     } else {
       if (dansAuth || segment0 === "(onboarding)") router.replace("/");
     }
-  }, [estAuthentifie, etatSession, etatSouscription, segments]);
+  }, [estAuthentifie, estAdmin, etatSession, etatSouscription, segments]);
 
   return null;
 }

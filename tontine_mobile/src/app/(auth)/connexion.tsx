@@ -9,7 +9,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/components/Toast";
 import { theme } from "@/theme";
 import { ErreurApi } from "@/api";
-import { normaliserTelephonePourEnvoi, validerTelephoneBenin, chiffresLocauxSaisis } from "@/utils/telephone";
+import { normaliserTelephonePourEnvoi, chiffresLocauxSaisis } from "@/utils/telephone";
 import { hapticErreur } from "@/utils/haptics";
 
 export default function Connexion() {
@@ -24,13 +24,13 @@ export default function Connexion() {
   const soumettre = async () => {
     setErreurPhone(null);
     setErreurGlobale(null);
-    if (!validerTelephoneBenin(phone)) {
-      setErreurPhone("Saisissez un numéro à 10 chiffres.");
+    const phoneNormalise = normaliserTelephonePourEnvoi(phone);
+    if (!phoneNormalise) {
+      setErreurPhone("Saisissez un numéro de téléphone valide.");
       hapticErreur();
       return;
     }
-    const phoneNormalise = normaliserTelephonePourEnvoi(phone);
-    if (!phoneNormalise || !password) {
+    if (!password) {
       setErreurGlobale("Veuillez remplir tous les champs.");
       hapticErreur();
       return;
@@ -61,7 +61,7 @@ export default function Connexion() {
             label="Téléphone"
             prefixe="+229 "
             clavier="number-pad"
-            maxLength={10}
+            maxLength={13}
             value={phone}
             onChangeText={(t) => setPhone(chiffresLocauxSaisis(t))}
             placeholder="01 97 00 00 00"

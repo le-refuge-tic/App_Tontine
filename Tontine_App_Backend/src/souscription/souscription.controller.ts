@@ -10,7 +10,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SouscriptionService } from './souscription.service';
-import { CreateSouscriptionDto } from './dto/create-souscription.dto';
+import { CreerSouscriptionDto } from './dto/creer-souscription.dto';
+import { DemanderChangementDto } from './dto/demander-changement.dto';
 import { UpdateSouscriptionDto } from './dto/update-souscription.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { UtilisateurCourant } from '../common/decorators/utilisateur-courant.decorator';
@@ -24,31 +25,60 @@ export class SouscriptionController {
   constructor(private readonly service: SouscriptionService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Liste les souscriptions. Membre : les siennes. Admin : toutes.' })
+  @ApiOperation({
+    summary: 'Liste les souscriptions. Membre : les siennes. Admin : toutes.',
+  })
   findAll(@UtilisateurCourant() courant: Membre) {
     const filtre = courant.role === Role.ADMIN ? undefined : courant.id;
     return this.service.findAll(filtre);
   }
 
+  @Get('active')
+  @ApiOperation({
+    summary:
+      'Renvoie la souscription active du membre connecté (404 si aucune).',
+  })
+  trouverActive(@UtilisateurCourant() courant: Membre) {
+    return this.service.trouverActive(courant.id);
+  }
+
+  @Post('changement')
+  @ApiOperation({
+    summary:
+      'Demande un changement de mise et/ou de régularité (effet au cycle suivant).',
+  })
+  demanderChangement(
+    @Body() dto: DemanderChangementDto,
+    @UtilisateurCourant() courant: Membre,
+  ) {
+    return this.service.demanderChangement(courant.id, dto);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Renvoie une souscription.' })
-  findOne(@Param('id', ParseIntPipe) id: number, @UtilisateurCourant() courant: Membre) {
+  findOne(
+    @Param('id', ParseIntPipe) id: number,
+    @UtilisateurCourant() courant: Membre,
+  ) {
     const filtre = courant.role === Role.ADMIN ? undefined : courant.id;
     return this.service.findOne(id, filtre);
   }
 
   @Post()
-  @ApiOperation({ summary: 'Crée une souscription.' })
-  create(@Body() dto: CreateSouscriptionDto, @UtilisateurCourant() courant: Membre) {
-    // Le membre ne peut créer que pour lui-même ; l'admin peut spécifier membreId.
-    if (courant.role !== Role.ADMIN) {
-      dto.membreId = courant.id;
-    }
-    return this.service.create(dto);
+  @ApiOperation({
+    summary:
+      'Crée une souscription pour le membre connecté et génère le cycle 1.',
+  })
+  creer(
+    @Body() dto: CreerSouscriptionDto,
+    @UtilisateurCourant() courant: Membre,
+  ) {
+    return this.service.creerPourMembre(courant.id, dto);
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Met à jour une souscription.' })
+  @Roles(Role.ADMIN)
+  @ApiOperation({ summary: 'Met à jour une souscription. Admin seulement.' })
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateSouscriptionDto,

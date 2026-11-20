@@ -143,6 +143,8 @@ export default function Cotiser() {
               </Text>
               <CarnetDuMois
                 jours={cycle.data.jours}
+                dateDebut={cycle.data.dateDebut}
+                dateFin={cycle.data.dateFin}
                 modeSelection
                 joursSelectionnes={joursSelectionnes}
                 onToggleJour={toggleJour}
