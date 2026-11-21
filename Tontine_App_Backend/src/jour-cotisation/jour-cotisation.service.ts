@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { JourCotisation } from './entities/jour-cotisation.entity';
 import { StatutJourCotisation } from '../common/enums';
 import { CreateJourCotisationDto } from './dto/create-jour-cotisation.dto';
@@ -72,34 +72,49 @@ export class JourCotisationService {
    * Marque un jour de cotisation comme (partiellement ou totalement) payé.
    *
    * - Ajoute `montant` à `montantPaye`.
-   * - Passe le statut à « payé » dès que `montantPaye >= montantDu`.
-   * - Refuse un jour déjà payé (pas de double paiement).
+   * - Passe le statut à `paye` dès que `montantPaye >= montantDu`, sauf si le
+   *   jour était `perdu` : dans ce cas il passe à `rattrape`.
+   * - Refuse un jour déjà payé ou rattrapé (pas de double paiement).
    * - Refuse un montant nul ou négatif.
+   * - Si un `EntityManager` est fourni, utilise la transaction DB en cours.
    *
    * TODO(decision) : paiement partiel d'un jour. Pour l'instant on autorise
    * l'accumulation de paiements partiels (montantPaye augmente jusqu'à
    * montantDu). À confirmer : doit-on exiger le règlement intégral d'un jour
    * en une seule fois ?
    */
-  async marquerPaye(jourId: number, montant: number): Promise<JourCotisation> {
+  async marquerPaye(
+    jourId: number,
+    montant: number,
+    manager?: EntityManager,
+  ): Promise<JourCotisation> {
     if (montant <= 0) {
       throw new BadRequestException(
         'Le montant du paiement doit être strictement positif.',
       );
     }
-    const jour = await this.repo.findOne({ where: { id: jourId } });
-    if (!jour)
+    const repo = manager ? manager.getRepository(JourCotisation) : this.repo;
+
+    const jour = await repo.findOne({ where: { id: jourId } });
+    if (!jour) {
       throw new NotFoundException(
         `Jour de cotisation introuvable : ${jourId}.`,
       );
-    if (jour.statut === StatutJourCotisation.PAYE) {
+    }
+    if (
+      jour.statut === StatutJourCotisation.PAYE ||
+      jour.statut === StatutJourCotisation.RATTRAPE
+    ) {
       throw new BadRequestException('Ce jour de cotisation est déjà payé.');
     }
 
+    const etaitPerdu = jour.statut === StatutJourCotisation.PERDU;
     jour.montantPaye += montant;
     if (jour.montantPaye >= jour.montantDu) {
-      jour.statut = StatutJourCotisation.PAYE;
+      jour.statut = etaitPerdu
+        ? StatutJourCotisation.RATTRAPE
+        : StatutJourCotisation.PAYE;
     }
-    return this.repo.save(jour);
+    return repo.save(jour);
   }
 }

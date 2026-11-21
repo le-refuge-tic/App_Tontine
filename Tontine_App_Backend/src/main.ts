@@ -1,12 +1,26 @@
+// Charger le .env AVANT tout import NestJS pour que process.env.NODE_ENV
+// soit disponible lors de l'évaluation des imports statiques (ex: app.module.ts).
+import 'dotenv/config';
 import { NestFactory, Reflector } from '@nestjs/core';
 import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { FedapayConfig } from './config/configuration';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  // rawBody activé pour la vérification de signature du webhook FedaPay.
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   const config = app.get(ConfigService);
+
+  // Garde de démarrage : refuser live FedaPay hors production.
+  const fedapay = config.get<FedapayConfig>('fedapay');
+  if (fedapay?.env === 'live' && process.env.NODE_ENV !== 'production') {
+    throw new Error(
+      'FEDAPAY_ENV=live est interdit hors NODE_ENV=production. ' +
+        'Utilisez FEDAPAY_ENV=sandbox en développement.',
+    );
+  }
 
   // Préfixe global des routes : /api/v1/...
   app.setGlobalPrefix('api/v1');
@@ -26,7 +40,8 @@ async function bootstrap(): Promise<void> {
   // CORS configurable via CORS_ORIGIN (liste séparée par des virgules, ou '*').
   const corsOrigin = config.get<string>('cors.origin') ?? '*';
   app.enableCors({
-    origin: corsOrigin === '*' ? true : corsOrigin.split(',').map((o) => o.trim()),
+    origin:
+      corsOrigin === '*' ? true : corsOrigin.split(',').map((o) => o.trim()),
   });
 
   // Documentation Swagger sur /api/docs.

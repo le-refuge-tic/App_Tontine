@@ -29,6 +29,10 @@ import { RemboursementModule } from './remboursement/remboursement.module';
 import { ParametreSystemeModule } from './parametre-systeme/parametre-systeme.module';
 import { NotificationModule } from './notification/notification.module';
 import { WebhookFedapayModule } from './webhook-fedapay/webhook-fedapay.module';
+import { FedapayModule } from './fedapay/fedapay.module';
+import { DepotModule } from './depot/depot.module';
+import { RapportModule } from './rapport/rapport.module';
+import { DevModule } from './dev/dev.module';
 
 const DEFAULT_DB: DbConfig = {
   host: '',
@@ -37,6 +41,10 @@ const DEFAULT_DB: DbConfig = {
   password: '',
   database: '',
 };
+
+/** Modules chargés uniquement en développement. */
+const modulesDevSeulement =
+  process.env.NODE_ENV === 'development' ? [DevModule] : [];
 
 @Module({
   imports: [
@@ -81,6 +89,10 @@ const DEFAULT_DB: DbConfig = {
     ParametreSystemeModule,
     NotificationModule,
     WebhookFedapayModule,
+    FedapayModule,
+    DepotModule,
+    RapportModule,
+    ...modulesDevSeulement,
   ],
   controllers: [AppController],
   providers: [

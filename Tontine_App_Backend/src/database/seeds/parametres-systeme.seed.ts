@@ -63,6 +63,13 @@ const parametres: Array<{ cle: string; valeur: string; description: string }> = 
     valeur: '30',
     description: 'Durée du blocage du code de retrait (minutes) après trop de tentatives',
   },
+  // ---- FedaPay ----
+  {
+    cle: 'pourcentage_frais_fedapay',
+    valeur: '0',
+    description:
+      'Pourcentage des frais FedaPay ajoutés au montant du dépôt (0 = aucun frais)',
+  },
 ];
 
 async function run(): Promise<void> {

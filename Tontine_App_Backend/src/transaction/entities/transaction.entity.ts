@@ -45,6 +45,13 @@ export class Transaction {
   })
   statut!: StatutTransaction;
 
+  /**
+   * Identifiants des jours de cotisation ciblés par ce dépôt (jsonb).
+   * Triés à l'écriture pour permettre la comparaison JSON anti-double-clic.
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  joursCibles!: number[] | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   dateOperation!: Date;
 

@@ -6,7 +6,9 @@ import * as Joi from 'joi';
  * requise est absente ou invalide.
  */
 export const validationSchema = Joi.object({
-  NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
+  NODE_ENV: Joi.string()
+    .valid('development', 'production', 'test')
+    .default('development'),
   PORT: Joi.number().port().default(3000),
 
   // ---- Base de données ----
@@ -39,4 +41,11 @@ export const validationSchema = Joi.object({
   // ---- Admin (seed) ----
   ADMIN_PHONE: Joi.string().allow('').optional(),
   ADMIN_PASSWORD: Joi.string().allow('').optional(),
+
+  // ---- FedaPay webhook + URL publique ----
+  FEDAPAY_WEBHOOK_SECRET: Joi.string().allow('').default(''),
+  APP_PUBLIC_URL: Joi.string().uri().allow('').default(''),
+  APP_ENV: Joi.string()
+    .valid('development', 'production', 'test')
+    .default('development'),
 });

@@ -14,7 +14,10 @@ export class CreateWebhookFedapayDto {
   @IsObject()
   payload!: Record<string, unknown>;
 
-  @ApiPropertyOptional({ example: false, description: 'Indique si le webhook a été traité.' })
+  @ApiPropertyOptional({
+    example: false,
+    description: 'Indique si le webhook a été traité.',
+  })
   @IsOptional()
   @IsBoolean()
   traite?: boolean;
