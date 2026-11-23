@@ -193,6 +193,11 @@ export class DepotService {
     savedTx.idFedapay = idFedapay;
     await this.txRepo.save(savedTx);
 
+    // Log temporaire : ID de transaction interne (pour simulation de webhook).
+    this.logger.log(
+      `Dépôt créé : transaction interne id=${savedTx.id}, idFedaPay=${idFedapay}, montant=${montantTotal} F`,
+    );
+
     // ---- 6. Générer le lien de paiement ----
     let urlPaiement: string;
     try {

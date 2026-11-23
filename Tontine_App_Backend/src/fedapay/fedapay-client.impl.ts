@@ -9,6 +9,15 @@ interface TransactionInstance {
   generateToken: () => Promise<{ token: string; url: string }>;
 }
 
+/** Instance d'un payout FedaPay (retournée par create/retrieve). */
+interface PayoutInstance {
+  id: number;
+  status: string;
+  fees?: number;
+  amount_transferred?: number;
+  sendNow: (opts?: Record<string, unknown>) => Promise<void>;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const FedaPay = require('fedapay') as {
   FedaPay: {
@@ -18,6 +27,10 @@ const FedaPay = require('fedapay') as {
   Transaction: {
     create: (data: Record<string, unknown>) => Promise<TransactionInstance>;
     retrieve: (id: number) => Promise<TransactionInstance>;
+  };
+  Payout: {
+    create: (data: Record<string, unknown>) => Promise<PayoutInstance>;
+    retrieve: (id: number) => Promise<PayoutInstance>;
   };
   Webhook: {
     constructEvent: (
@@ -29,8 +42,11 @@ const FedaPay = require('fedapay') as {
 };
 
 import type {
+  CreerPayoutParams,
   CreerTransactionParams,
   IFedapayClient,
+  PayoutFedapay,
+  ResultatCreerPayout,
   ResultatCreerTransaction,
   ResultatGenererLien,
   TransactionFedapay,
@@ -156,7 +172,9 @@ export class FedapayClientImpl implements IFedapayClient {
       ]);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.logger.error(`FedaPay lireTransaction échoué (id=${idFedapay}) : ${msg}`);
+      this.logger.error(
+        `FedaPay lireTransaction échoué (id=${idFedapay}) : ${msg}`,
+      );
       throw err;
     }
 
@@ -181,5 +199,93 @@ export class FedapayClientImpl implements IFedapayClient {
       this.logger.warn('Signature webhook FedaPay invalide.');
       throw err;
     }
+  }
+
+  async creerEtEnvoyerPayout(
+    params: CreerPayoutParams,
+  ): Promise<ResultatCreerPayout> {
+    const timeoutSignal = AbortSignal.timeout(TIMEOUT_MS);
+
+    // Même logique que creerTransaction : retirer le préfixe 229 pour obtenir
+    // les 10 chiffres locaux attendus par FedaPay.
+    const phoneRaw = params.client.phone.replace(/^229/, '');
+
+    const mots = params.client.nom.trim().split(/\s+/);
+    const firstname = mots[0] ?? params.client.nom;
+    const lastname = mots.slice(1).join(' ') || firstname;
+
+    let payout: PayoutInstance;
+    try {
+      payout = await Promise.race([
+        FedaPay.Payout.create({
+          amount: params.montant,
+          currency: { iso: 'XOF' },
+          description: params.description,
+          merchant_reference: params.referenceUnique,
+          customer: {
+            firstname,
+            lastname,
+            phone_number: { number: phoneRaw, country: 'BJ' },
+          },
+        }),
+        new Promise<never>((_, reject) =>
+          timeoutSignal.addEventListener('abort', () =>
+            reject(new Error('Timeout FedaPay Payout.create')),
+          ),
+        ),
+      ]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`FedaPay Payout.create échoué : ${msg}`);
+      throw err;
+    }
+
+    try {
+      await Promise.race([
+        payout.sendNow(),
+        new Promise<never>((_, reject) =>
+          timeoutSignal.addEventListener('abort', () =>
+            reject(new Error('Timeout FedaPay payout.sendNow')),
+          ),
+        ),
+      ]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `FedaPay payout.sendNow échoué (id=${payout.id}) : ${msg}`,
+      );
+      throw err;
+    }
+
+    return { idFedapayPayout: String(payout.id), statut: payout.status };
+  }
+
+  async lirePayout(idFedapayPayout: string): Promise<PayoutFedapay> {
+    const timeoutSignal = AbortSignal.timeout(TIMEOUT_MS);
+
+    let payout: PayoutInstance;
+    try {
+      payout = await Promise.race([
+        FedaPay.Payout.retrieve(Number(idFedapayPayout)),
+        new Promise<never>((_, reject) =>
+          timeoutSignal.addEventListener('abort', () =>
+            reject(new Error('Timeout FedaPay Payout.retrieve')),
+          ),
+        ),
+      ]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `FedaPay lirePayout échoué (id=${idFedapayPayout}) : ${msg}`,
+      );
+      throw err;
+    }
+
+    return {
+      idFedapayPayout: String(payout.id),
+      statut: payout.status,
+      fees: payout.fees ?? 0,
+      amountTransferred: payout.amount_transferred ?? 0,
+    };
   }
 }

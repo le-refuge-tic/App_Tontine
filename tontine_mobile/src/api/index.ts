@@ -20,3 +20,5 @@ export * as ecritures from "./ecritures";
 export * as notifications from "./notifications";
 export * as depots from "./depots";
 export * as retraits from "./retraits";
+export * as rapport from "./rapport";
+export * as dev from "./dev";

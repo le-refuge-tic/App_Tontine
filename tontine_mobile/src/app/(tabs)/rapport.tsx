@@ -9,9 +9,9 @@ import { Icone } from "@/components/Icone";
 import { Carte } from "@/components/Carte";
 import { ListeSquelette, Squelette } from "@/components/Squelette";
 import { theme } from "@/theme";
-import { useEcritures } from "@/hooks/useRequetes";
+import { useRapport } from "@/hooks/useRequetes";
 import { formaterFCFA } from "@/utils/formaterFCFA";
-import { formaterMoisAnnee, composantsDepuisIso, maintenantComposants, formaterDateCourte } from "@/utils/dates";
+import { formaterMoisAnnee, maintenantComposants, composantsDepuisIso, formaterDateCourte } from "@/utils/dates";
 import { hapticSelection } from "@/utils/haptics";
 import type { EcritureComptable } from "@/api/types";
 
@@ -23,53 +23,48 @@ const FILTRES: OptionSegmente[] = [
 
 type Filtre = "tout" | "cotisations" | "retraits";
 
-function moisKey(d: { annee: number; mois: number }) { return `${d.annee}-${d.mois}`; }
+function moisISO(annee: number, mois: number): string {
+  // mois est 0-indexé (comme Date.getMonth)
+  return `${annee}-${String(mois + 1).padStart(2, "0")}`;
+}
 
 export default function Rapport() {
-  const ecritures = useEcritures();
-  const [rafraichit, setRafraichit] = useState(false);
-  const [filtre, setFiltre] = useState<Filtre>("tout");
   const maintenant = maintenantComposants();
+  const [filtre, setFiltre] = useState<Filtre>("tout");
   const [mois, setMois] = useState({ annee: maintenant.annee, mois: maintenant.mois });
+  const [rafraichit, setRafraichit] = useState(false);
+
+  const moisStr = moisISO(mois.annee, mois.mois);
+  const rapportQ = useRapport(moisStr, filtre);
 
   const allerMoisPrecedent = () => {
     hapticSelection();
-    setMois((m) => {
-      const nouv = m.mois === 0 ? { annee: m.annee - 1, mois: 11 } : { annee: m.annee, mois: m.mois - 1 };
-      return nouv;
-    });
+    setMois((m) =>
+      m.mois === 0 ? { annee: m.annee - 1, mois: 11 } : { annee: m.annee, mois: m.mois - 1 },
+    );
   };
   const allerMoisSuivant = () => {
     hapticSelection();
-    setMois((m) => {
-      const nouv = m.mois === 11 ? { annee: m.annee + 1, mois: 0 } : { annee: m.annee, mois: m.mois + 1 };
-      return nouv;
-    });
+    setMois((m) =>
+      m.mois === 11 ? { annee: m.annee + 1, mois: 0 } : { annee: m.annee, mois: m.mois + 1 },
+    );
   };
 
   const rafraichir = async () => {
     setRafraichit(true);
-    await ecritures.refetch();
+    await rapportQ.refetch();
     setRafraichit(false);
   };
 
-  // Filtrage par mois et filtre métier.
-  const ecrituresDuMois = (ecritures.data ?? []).filter((e) => {
-    const c = composantsDepuisIso(e.date);
-    if (c.annee !== mois.annee || c.mois !== mois.mois) return false;
-    if (filtre === "cotisations") return e.type === "cotisation";
-    if (filtre === "retraits") return e.type === "retrait" || e.type === "retrait_epargne";
-    return true;
-  });
+  // Totaux fournis par le serveur.
+  const totaux = rapportQ.data?.totaux ?? { cotise: 0, retire: 0, fondsRetenu: 0 };
 
-  // Totaux du mois.
-  const cotiseMois = ecrituresDuMois.filter((e) => e.sens === "credit" && e.type !== "retrait_epargne").reduce((s, e) => s + e.montant, 0);
-  const retireMois = ecrituresDuMois.filter((e) => e.sens === "debit" && (e.type === "retrait" || e.type === "retrait_epargne")).reduce((s, e) => s + e.montant, 0);
-  const fondsRetenuMois = ecrituresDuMois.filter((e) => e.type === "fonds_caisse" || e.type === "retenue_epargne").reduce((s, e) => s + e.montant, 0);
+  // Écritures du rapport (déjà filtrées côté serveur).
+  const ecritures: EcritureComptable[] = rapportQ.data?.ecritures ?? [];
 
   // Groupement par jour.
   const parJour = new Map<string, { label: string; items: EcritureComptable[] }>();
-  ecrituresDuMois.forEach((e) => {
+  ecritures.forEach((e) => {
     const c = composantsDepuisIso(e.date);
     const k = `${c.annee}-${c.mois}-${c.jour}`;
     if (!parJour.has(k)) parJour.set(k, { label: formaterDateCourte(e.date), items: [] });
@@ -80,11 +75,7 @@ export default function Rapport() {
   return (
     <SafeAreaView style={styles.racine} edges={["top"]}>
       <View style={styles.entete}>
-        <Text
-          style={[theme.typographie.titre3, styles.entetetitre]}
-          numberOfLines={1}
-          maxFontSizeMultiplier={1.2}
-        >
+        <Text style={[theme.typographie.titre3, styles.entetetitre]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
           Rapport
         </Text>
 
@@ -93,10 +84,7 @@ export default function Rapport() {
           <Pressable onPress={allerMoisPrecedent} hitSlop={12} accessibilityLabel="Mois précédent">
             <Icone nom="chevron-back" taille={24} couleur={theme.couleurs.textePrimaire} />
           </Pressable>
-          <Text
-            style={[theme.typographie.corpsMedium, { color: theme.couleurs.textePrimaire }]}
-            maxFontSizeMultiplier={1.2}
-          >
+          <Text style={[theme.typographie.corpsMedium, { color: theme.couleurs.textePrimaire }]} maxFontSizeMultiplier={1.2}>
             {formaterMoisAnnee(mois)}
           </Text>
           <Pressable onPress={allerMoisSuivant} hitSlop={12} accessibilityLabel="Mois suivant">
@@ -105,28 +93,35 @@ export default function Rapport() {
         </View>
       </View>
 
-      <ControleSegmente options={FILTRES} valeur={filtre} onChange={(v) => setFiltre(v as Filtre)} style_wrapper={styles.filtreConteneur} />
+      <ControleSegmente
+        options={FILTRES}
+        valeur={filtre}
+        onChange={(v) => setFiltre(v as Filtre)}
+        style_wrapper={styles.filtreConteneur}
+      />
 
-      {ecritures.isPending ? (
+      {rapportQ.isPending ? (
         <View style={styles.corps}>
           <Squelette width="100%" height={80} rayon={14} />
           <ListeSquelette nombre={6} />
         </View>
-      ) : ecritures.isError ? (
-        <EtatErreur message="Impossible de charger les opérations." onReessayer={() => ecritures.refetch()} />
+      ) : rapportQ.isError ? (
+        <EtatErreur message="Impossible de charger les opérations." onReessayer={() => rapportQ.refetch()} />
       ) : (
         <SectionList
           sections={sections}
           keyExtractor={(e) => String(e.id)}
           renderItem={({ item }) => <LigneOperation ecriture={item} />}
           renderSectionHeader={({ section: { title } }) => (
-            <View style={styles.enteteSection}><Text style={[theme.typographie.corps2Medium, { color: theme.couleurs.texteSecondaire }]}>{title}</Text></View>
+            <View style={styles.enteteSection}>
+              <Text style={[theme.typographie.corps2Medium, { color: theme.couleurs.texteSecondaire }]}>{title}</Text>
+            </View>
           )}
           ListHeaderComponent={() => (
             <View style={styles.tuiles}>
-              <Tuile label="Cotisé" montant={cotiseMois} icone="arrow-down-circle-outline" couleur={theme.couleurs.succes} />
-              <Tuile label="Retiré" montant={retireMois} icone="arrow-up-circle-outline" couleur={theme.couleurs.texteSecondaire} />
-              <Tuile label="Fonds retenu" montant={fondsRetenuMois} icone="lock-closed-outline" couleur={theme.couleurs.or} />
+              <Tuile label="Cotisé" montant={totaux.cotise} icone="arrow-down-circle-outline" couleur={theme.couleurs.succes} />
+              <Tuile label="Retiré" montant={totaux.retire} icone="arrow-up-circle-outline" couleur={theme.couleurs.texteSecondaire} />
+              <Tuile label="Fonds retenu" montant={totaux.fondsRetenu} icone="lock-closed-outline" couleur={theme.couleurs.or} />
             </View>
           )}
           ListEmptyComponent={() => (
@@ -141,7 +136,17 @@ export default function Rapport() {
   );
 }
 
-function Tuile({ label, montant, icone, couleur }: { label: string; montant: number; icone: import("@/components/Icone").NomIcone; couleur: string }) {
+function Tuile({
+  label,
+  montant,
+  icone,
+  couleur,
+}: {
+  label: string;
+  montant: number;
+  icone: import("@/components/Icone").NomIcone;
+  couleur: string;
+}) {
   return (
     <Carte style={styles.tuile}>
       <Icone nom={icone} taille={22} couleur={couleur} />

@@ -104,6 +104,7 @@ function RacineApp() {
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="profil" options={{ presentation: "card" }} />
         <Stack.Screen name="notifications" options={{ presentation: "card" }} />
+        <Stack.Screen name="outils-test" options={{ presentation: "card" }} />
       </Stack>
 
       {/*

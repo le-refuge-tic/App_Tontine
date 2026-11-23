@@ -24,6 +24,7 @@ import { CycleService } from '../cycle/cycle.service';
 import { ParametreSystemeService } from '../parametre-systeme/parametre-systeme.service';
 import { FedapayClientFaux } from '../fedapay/fedapay-client.faux';
 import { FEDAPAY_CLIENT } from '../fedapay/fedapay-client.interface';
+import { NotificationService } from '../notification/notification.service';
 import { WebhookFedapayService } from '../webhook-fedapay/webhook-fedapay.service';
 import { WebhookFedapay } from '../webhook-fedapay/entities/webhook-fedapay.entity';
 import { Transaction } from '../transaction/entities/transaction.entity';
@@ -79,7 +80,9 @@ function fabriqueJour(overrides: Partial<JourCotisation> = {}): JourCotisation {
   });
 }
 
-function fabriqueTransaction(overrides: Partial<Transaction> = {}): Transaction {
+function fabriqueTransaction(
+  overrides: Partial<Transaction> = {},
+): Transaction {
   return Object.assign(new Transaction(), {
     id: 1,
     type: TypeTransaction.DEPOT,
@@ -142,7 +145,9 @@ describe('DepotService', () => {
   };
 
   const configServiceMock = {
-    get: jest.fn().mockReturnValue({ appPublicUrl: 'https://example.com', env: 'sandbox' }),
+    get: jest
+      .fn()
+      .mockReturnValue({ appPublicUrl: 'https://example.com', env: 'sandbox' }),
   };
 
   beforeEach(async () => {
@@ -186,7 +191,7 @@ describe('DepotService', () => {
       expect(txRepoMock.save).toHaveBeenCalled();
     });
 
-    it('400 si aucun jour a payer aujourd\'hui', async () => {
+    it("400 si aucun jour a payer aujourd'hui", async () => {
       (cycleServiceMock.enCours as jest.Mock).mockResolvedValue({
         jours: [fabriqueJour({ datePrevue: '1970-01-01' })],
       });
@@ -230,15 +235,25 @@ describe('DepotService', () => {
       });
       txRepoMock.find.mockResolvedValue([vieilleTx]);
 
-      await expect(service.creer(membre.id, {})).rejects.toThrow(ConflictException);
+      await expect(service.creer(membre.id, {})).rejects.toThrow(
+        ConflictException,
+      );
     });
   });
 
   describe('creer - rattrapage', () => {
     it('utilise CycleService.rattraperJours pour calculer le total', async () => {
       const membre = fabriqueMembre();
-      const jour1 = fabriqueJour({ id: 11, montantDu: 500, statut: StatutJourCotisation.PERDU });
-      const jour2 = fabriqueJour({ id: 12, montantDu: 500, statut: StatutJourCotisation.PERDU });
+      const jour1 = fabriqueJour({
+        id: 11,
+        montantDu: 500,
+        statut: StatutJourCotisation.PERDU,
+      });
+      const jour2 = fabriqueJour({
+        id: 12,
+        montantDu: 500,
+        statut: StatutJourCotisation.PERDU,
+      });
 
       (cycleServiceMock.rattraperJours as jest.Mock).mockResolvedValue({
         jours: [jour1, jour2],
@@ -246,12 +261,17 @@ describe('DepotService', () => {
       });
       txRepoMock.find.mockResolvedValue([]);
       membreRepoMock.findOneBy.mockResolvedValue(membre);
-      txRepoMock.create.mockReturnValue(fabriqueTransaction({ montant: 1000, joursCibles: [11, 12] }));
+      txRepoMock.create.mockReturnValue(
+        fabriqueTransaction({ montant: 1000, joursCibles: [11, 12] }),
+      );
       txRepoMock.save.mockImplementation(async (t: Transaction) => t);
 
       const resultat = await service.creer(membre.id, { jourIds: [11, 12] });
 
-      expect(cycleServiceMock.rattraperJours).toHaveBeenCalledWith([11, 12], membre.id);
+      expect(cycleServiceMock.rattraperJours).toHaveBeenCalledWith(
+        [11, 12],
+        membre.id,
+      );
       expect(resultat.transaction.montant).toBe(1000);
     });
   });
@@ -270,7 +290,9 @@ describe('DepotService', () => {
       txRepoMock.create.mockReturnValue(tx);
       txRepoMock.save.mockImplementation(async (t: Transaction) => t);
 
-      jest.spyOn(fedapayFaux, 'creerTransaction').mockRejectedValue(new Error('Reseau KO'));
+      jest
+        .spyOn(fedapayFaux, 'creerTransaction')
+        .mockRejectedValue(new Error('Reseau KO'));
 
       await expect(service.creer(membre.id, {})).rejects.toThrow(
         ServiceUnavailableException,
@@ -282,7 +304,7 @@ describe('DepotService', () => {
   });
 
   describe('isolation membres', () => {
-    it('ne voit pas les transactions d\'un autre membre (CycleService leve 404)', async () => {
+    it("ne voit pas les transactions d'un autre membre (CycleService leve 404)", async () => {
       (cycleServiceMock.enCours as jest.Mock).mockRejectedValue(
         new NotFoundException('Aucun cycle en cours.'),
       );
@@ -293,6 +315,29 @@ describe('DepotService', () => {
 });
 
 // ─── TransactionService.confirmer ────────────────────────────────────────────
+
+/**
+ * Fabrique un mock de QueryBuilder complet pour recalculerPortefeuille.
+ * Retourne des valeurs nominales : coti_credit=500, tout le reste à 0.
+ */
+function fabriqueQbRecalcul(overrides: Record<string, string> = {}) {
+  const defaults = {
+    coti_credit: '500',
+    coti_debit: '0',
+    retrait_debit: '0',
+    epargne_credit: '0',
+    epargne_debit: '0',
+    bloque_credit: '0',
+    bloque_debit: '0',
+  };
+  return {
+    select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    getRawOne: jest.fn().mockResolvedValue({ ...defaults, ...overrides }),
+  };
+}
 
 describe('TransactionService - confirmer()', () => {
   let txService: TransactionService;
@@ -306,6 +351,8 @@ describe('TransactionService - confirmer()', () => {
     manager: { transaction: jest.fn() },
   };
 
+  const notifMockBase = { create: jest.fn().mockResolvedValue(undefined) };
+
   beforeEach(async () => {
     jest.clearAllMocks();
     fedapayFaux = new FedapayClientFaux();
@@ -317,6 +364,7 @@ describe('TransactionService - confirmer()', () => {
         TransactionService,
         { provide: TX_REPO, useValue: txRepoMock },
         { provide: FEDAPAY_CLIENT, useValue: fedapayFaux },
+        { provide: NotificationService, useValue: notifMockBase },
       ],
     }).compile();
 
@@ -347,17 +395,14 @@ describe('TransactionService - confirmer()', () => {
     const ecritureRepoMock = {
       create: jest.fn().mockImplementation((v: unknown) => v),
       save: jest.fn().mockImplementation(async (e: EcritureComptable) => {
-        ecrituresSauvegardees.push(e as EcritureComptable);
-        return { ...(e as object), id: ecrituresSauvegardees.length } as EcritureComptable;
+        ecrituresSauvegardees.push(e);
+        return {
+          ...(e as object),
+          id: ecrituresSauvegardees.length,
+        } as EcritureComptable;
       }),
       count: jest.fn().mockResolvedValue(0), // premier depot
-      createQueryBuilder: jest.fn().mockReturnValue({
-        select: jest.fn().mockReturnThis(),
-        where: jest.fn().mockReturnThis(),
-        getRawOne: jest.fn().mockResolvedValue({
-          '0': '500', '1': '0', '2': '0', '3': '0', '4': '0', '5': '0',
-        }),
-      }),
+      createQueryBuilder: jest.fn().mockReturnValue(fabriqueQbRecalcul()),
     };
     const cycleRepoMock = {
       findOne: jest.fn().mockResolvedValue(cycle),
@@ -365,7 +410,7 @@ describe('TransactionService - confirmer()', () => {
     const caisseRepoMock = {
       create: jest.fn().mockImplementation((v: unknown) => v),
       save: jest.fn().mockImplementation(async (c: CaisseApplication) => {
-        caisseSauvegardee.push(c as CaisseApplication);
+        caisseSauvegardee.push(c);
         return c;
       }),
     };
@@ -375,11 +420,13 @@ describe('TransactionService - confirmer()', () => {
       update: jest.fn(),
     };
     const portefeuilleRepoMock = {
-      update: jest.fn().mockImplementation(
-        async (_where: unknown, vals: Partial<Portefeuille>) => {
-          portefeuilleMaj.push(vals);
-        },
-      ),
+      update: jest
+        .fn()
+        .mockImplementation(
+          async (_where: unknown, vals: Partial<Portefeuille>) => {
+            portefeuilleMaj.push(vals);
+          },
+        ),
     };
 
     const manager = {
@@ -396,31 +443,46 @@ describe('TransactionService - confirmer()', () => {
       }),
     };
 
-    await txService.confirmer(1, manager as Parameters<typeof txService.confirmer>[1]);
+    await txService.confirmer(
+      1,
+      manager as Parameters<typeof txService.confirmer>[1],
+    );
 
     // Statut = REUSSI
-    const txSauve = (txRepoInterne.save as jest.Mock).mock.calls[0][0] as Transaction;
+    const txSauve = txRepoInterne.save.mock.calls[0][0] as Transaction;
     expect(txSauve.statut).toBe(StatutTransaction.REUSSI);
     expect(txSauve.fraisFedapay).toBe(50);
 
     // Ecriture cotisation
     const ecritureCotisation = ecrituresSauvegardees.find(
-      (e) => (e as unknown as Record<string, unknown>)['type'] === TypeEcriture.COTISATION,
+      (e) =>
+        (e as unknown as Record<string, unknown>)['type'] ===
+        TypeEcriture.COTISATION,
     );
     expect(ecritureCotisation).toBeDefined();
-    expect((ecritureCotisation as unknown as Record<string, unknown>)['sens']).toBe(SensEcriture.CREDIT);
-    expect((ecritureCotisation as unknown as Record<string, unknown>)['montant']).toBe(500);
+    expect(
+      (ecritureCotisation as unknown as Record<string, unknown>)['sens'],
+    ).toBe(SensEcriture.CREDIT);
+    expect(
+      (ecritureCotisation as unknown as Record<string, unknown>)['montant'],
+    ).toBe(500);
 
     // Ecriture fonds_caisse
     const ecritureFonds = ecrituresSauvegardees.find(
-      (e) => (e as unknown as Record<string, unknown>)['type'] === TypeEcriture.FONDS_CAISSE,
+      (e) =>
+        (e as unknown as Record<string, unknown>)['type'] ===
+        TypeEcriture.FONDS_CAISSE,
     );
     expect(ecritureFonds).toBeDefined();
-    expect((ecritureFonds as unknown as Record<string, unknown>)['sens']).toBe(SensEcriture.DEBIT);
+    expect((ecritureFonds as unknown as Record<string, unknown>)['sens']).toBe(
+      SensEcriture.DEBIT,
+    );
 
     // CaisseApplication
     expect(caisseSauvegardee).toHaveLength(1);
-    expect((caisseSauvegardee[0] as unknown as Record<string, unknown>)['source']).toBe(SourceCaisse.FONDS_CAISSE);
+    expect(
+      (caisseSauvegardee[0] as unknown as Record<string, unknown>)['source'],
+    ).toBe(SourceCaisse.FONDS_CAISSE);
   });
 
   it('2. Deuxieme depot : pas de nouvelle ecriture fonds_caisse', async () => {
@@ -441,15 +503,14 @@ describe('TransactionService - confirmer()', () => {
     const ecritureRepoMock = {
       create: jest.fn().mockImplementation((v: unknown) => v),
       save: jest.fn().mockImplementation(async (e: EcritureComptable) => {
-        ecrituresSauvegardees.push(e as EcritureComptable);
-        return { ...(e as object), id: ecrituresSauvegardees.length } as EcritureComptable;
+        ecrituresSauvegardees.push(e);
+        return {
+          ...(e as object),
+          id: ecrituresSauvegardees.length,
+        } as EcritureComptable;
       }),
       count: jest.fn().mockResolvedValue(1), // deja une ecriture fonds_caisse
-      createQueryBuilder: jest.fn().mockReturnValue({
-        select: jest.fn().mockReturnThis(),
-        where: jest.fn().mockReturnThis(),
-        getRawOne: jest.fn().mockResolvedValue({ '0': '500', '1': '0', '2': '0', '3': '0', '4': '0', '5': '0' }),
-      }),
+      createQueryBuilder: jest.fn().mockReturnValue(fabriqueQbRecalcul()),
     };
 
     const manager = {
@@ -475,10 +536,15 @@ describe('TransactionService - confirmer()', () => {
       }),
     };
 
-    await txService.confirmer(2, manager as Parameters<typeof txService.confirmer>[1]);
+    await txService.confirmer(
+      2,
+      manager as Parameters<typeof txService.confirmer>[1],
+    );
 
     const ecritureFonds = ecrituresSauvegardees.find(
-      (e) => (e as unknown as Record<string, unknown>)['type'] === TypeEcriture.FONDS_CAISSE,
+      (e) =>
+        (e as unknown as Record<string, unknown>)['type'] ===
+        TypeEcriture.FONDS_CAISSE,
     );
     expect(ecritureFonds).toBeUndefined();
   });
@@ -519,16 +585,14 @@ describe('TransactionService - confirmer()', () => {
           [JourCotisation.name]: jourRepoMock,
           [EcritureComptable.name]: {
             create: jest.fn().mockImplementation((v: unknown) => v),
-            save: jest.fn().mockImplementation(async (e: EcritureComptable) => ({
-              ...(e as object),
-              id: 99,
-            })),
+            save: jest
+              .fn()
+              .mockImplementation(async (e: EcritureComptable) => ({
+                ...(e as object),
+                id: 99,
+              })),
             count: jest.fn().mockResolvedValue(1),
-            createQueryBuilder: jest.fn().mockReturnValue({
-              select: jest.fn().mockReturnThis(),
-              where: jest.fn().mockReturnThis(),
-              getRawOne: jest.fn().mockResolvedValue({ '0': '500', '1': '0', '2': '0', '3': '0', '4': '0', '5': '0' }),
-            }),
+            createQueryBuilder: jest.fn().mockReturnValue(fabriqueQbRecalcul()),
           },
           [Cycle.name]: {
             findOne: jest.fn().mockResolvedValue(jourPerdu.cycle),
@@ -543,7 +607,10 @@ describe('TransactionService - confirmer()', () => {
       }),
     };
 
-    await txService.confirmer(3, manager as Parameters<typeof txService.confirmer>[1]);
+    await txService.confirmer(
+      3,
+      manager as Parameters<typeof txService.confirmer>[1],
+    );
 
     expect(statutFinal).toBe(StatutJourCotisation.RATTRAPE);
   });
@@ -575,15 +642,14 @@ describe('TransactionService - confirmer()', () => {
           },
           [EcritureComptable.name]: {
             create: jest.fn().mockImplementation((v: unknown) => v),
-            save: jest.fn().mockImplementation(async (e: EcritureComptable) => ({ ...(e as object), id: 1 })),
+            save: jest
+              .fn()
+              .mockImplementation(async (e: EcritureComptable) => ({
+                ...(e as object),
+                id: 1,
+              })),
             count: jest.fn().mockResolvedValue(0),
-            createQueryBuilder: jest.fn().mockReturnValue({
-              select: jest.fn().mockReturnThis(),
-              where: jest.fn().mockReturnThis(),
-              getRawOne: jest.fn().mockResolvedValue({
-                '0': '500', '1': '0', '2': '0', '3': '0', '4': '0', '5': '0',
-              }),
-            }),
+            createQueryBuilder: jest.fn().mockReturnValue(fabriqueQbRecalcul()),
           },
           [Cycle.name]: {
             findOne: jest.fn().mockResolvedValue(jour.cycle),
@@ -593,18 +659,23 @@ describe('TransactionService - confirmer()', () => {
             save: jest.fn(),
           },
           [Portefeuille.name]: {
-            update: jest.fn().mockImplementation(
-              async (_where: unknown, vals: Partial<Portefeuille>) => {
-                portefeuilleMaj.push(vals);
-              },
-            ),
+            update: jest
+              .fn()
+              .mockImplementation(
+                async (_where: unknown, vals: Partial<Portefeuille>) => {
+                  portefeuilleMaj.push(vals);
+                },
+              ),
           },
         };
         return map[entity.name] ?? {};
       }),
     };
 
-    await txService.confirmer(4, manager as Parameters<typeof txService.confirmer>[1]);
+    await txService.confirmer(
+      4,
+      manager as Parameters<typeof txService.confirmer>[1],
+    );
 
     expect(portefeuilleMaj).toHaveLength(1);
     expect(portefeuilleMaj[0].soldeCotisation).toBe(500);
@@ -612,7 +683,7 @@ describe('TransactionService - confirmer()', () => {
     expect(portefeuilleMaj[0].soldeBloque).toBe(0);
   });
 
-  it('10. Isolation membres : findOne respecte l\'appartenance', async () => {
+  it("10. Isolation membres : findOne respecte l'appartenance", async () => {
     const txAutreMembre = fabriqueTransaction({
       id: 99,
       membre: fabriqueMembre({ id: 2 }),
@@ -624,6 +695,7 @@ describe('TransactionService - confirmer()', () => {
         TransactionService,
         { provide: TX_REPO, useValue: txRepoMock },
         { provide: FEDAPAY_CLIENT, useValue: fedapayFaux },
+        { provide: NotificationService, useValue: { create: jest.fn() } },
       ],
     }).compile();
 
@@ -679,20 +751,34 @@ describe('WebhookFedapayService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         WebhookFedapayService,
-        { provide: WEBHOOK_REPO, useValue: overrides?.webhookRepo ?? webhookRepoBase },
+        {
+          provide: WEBHOOK_REPO,
+          useValue: overrides?.webhookRepo ?? webhookRepoBase,
+        },
         { provide: TX_REPO, useValue: overrides?.txRepo ?? txRepoBase },
-        { provide: TransactionService, useValue: overrides?.txService ?? txServiceBase },
-        { provide: FEDAPAY_CLIENT, useValue: overrides?.fedapay ?? fedapayFaux },
+        {
+          provide: TransactionService,
+          useValue: overrides?.txService ?? txServiceBase,
+        },
+        {
+          provide: FEDAPAY_CLIENT,
+          useValue: overrides?.fedapay ?? fedapayFaux,
+        },
       ],
     }).compile();
     return module.get<WebhookFedapayService>(WebhookFedapayService);
   }
 
-  it('3. Webhook rejoue : confirmer() n\'est pas rappele si deja traite', async () => {
+  it("3. Webhook rejoue : confirmer() n'est pas rappele si deja traite", async () => {
     const confirmerMock = jest.fn().mockResolvedValue(undefined);
     const webhookRepo = {
       ...webhookRepoBase,
-      findOne: jest.fn().mockResolvedValue({ id: 1, evenement: 'transaction.approved', idFedapayRef: '12345', traite: true }),
+      findOne: jest.fn().mockResolvedValue({
+        id: 1,
+        evenement: 'transaction.approved',
+        idFedapayRef: '12345',
+        traite: true,
+      }),
       create: jest.fn(),
       save: jest.fn(),
       update: jest.fn(),
@@ -703,7 +789,9 @@ describe('WebhookFedapayService', () => {
       txService: { confirmer: confirmerMock, echouer: jest.fn() },
     });
 
-    const corps = Buffer.from(JSON.stringify({ event: 'transaction.approved', id: 12345 }));
+    const corps = Buffer.from(
+      JSON.stringify({ event: 'transaction.approved', id: 12345 }),
+    );
     const resultat = await svc.traiter(corps, 'sig');
 
     expect(resultat.recu).toBe(true);
@@ -724,7 +812,9 @@ describe('WebhookFedapayService', () => {
 
     const svc = await buildWebhookService({ webhookRepo, fedapay: fauxx });
 
-    const corps = Buffer.from(JSON.stringify({ event: 'transaction.approved', id: 12345 }));
+    const corps = Buffer.from(
+      JSON.stringify({ event: 'transaction.approved', id: 12345 }),
+    );
     await expect(svc.traiter(corps, 'mauvaise_signature')).rejects.toThrow(
       UnauthorizedException,
     );
@@ -736,8 +826,15 @@ describe('WebhookFedapayService', () => {
     const confirmerMock = jest.fn().mockResolvedValue(undefined);
     const echouerMock = jest.fn().mockResolvedValue(undefined);
 
-    const txInterne = fabriqueTransaction({ idFedapay: '12345', statut: StatutTransaction.EN_ATTENTE });
-    const webhookSauvegarde = { id: 10, evenement: 'transaction.declined', traite: false };
+    const txInterne = fabriqueTransaction({
+      idFedapay: '12345',
+      statut: StatutTransaction.EN_ATTENTE,
+    });
+    const webhookSauvegarde = {
+      id: 10,
+      evenement: 'transaction.declined',
+      traite: false,
+    };
 
     const webhookRepo = {
       ...webhookRepoBase,
@@ -750,20 +847,22 @@ describe('WebhookFedapayService', () => {
     const txRepo = {
       findOne: jest.fn().mockResolvedValue(txInterne),
       manager: {
-        transaction: jest.fn().mockImplementation(async (cb: (m: unknown) => unknown) => {
-          const mgr = {
-            getRepository: (entity: { name: string }) => {
-              if (entity.name === Transaction.name) {
-                return { findOne: jest.fn().mockResolvedValue(txInterne) };
-              }
-              if (entity.name === WebhookFedapay.name) {
-                return { update: jest.fn() };
-              }
-              return {};
-            },
-          };
-          return cb(mgr);
-        }),
+        transaction: jest
+          .fn()
+          .mockImplementation(async (cb: (m: unknown) => unknown) => {
+            const mgr = {
+              getRepository: (entity: { name: string }) => {
+                if (entity.name === Transaction.name) {
+                  return { findOne: jest.fn().mockResolvedValue(txInterne) };
+                }
+                if (entity.name === WebhookFedapay.name) {
+                  return { update: jest.fn() };
+                }
+                return {};
+              },
+            };
+            return cb(mgr);
+          }),
       },
     };
 
@@ -773,7 +872,9 @@ describe('WebhookFedapayService', () => {
       txService: { confirmer: confirmerMock, echouer: echouerMock },
     });
 
-    const corps = Buffer.from(JSON.stringify({ event: 'transaction.declined', id: 12345 }));
+    const corps = Buffer.from(
+      JSON.stringify({ event: 'transaction.declined', id: 12345 }),
+    );
     const resultat = await svc.traiter(corps, 'sig');
 
     expect(resultat.recu).toBe(true);
@@ -792,7 +893,11 @@ describe('WebhookFedapayService', () => {
     const webhookRepo = {
       ...webhookRepoBase,
       findOne: jest.fn().mockResolvedValue(null),
-      create: jest.fn().mockReturnValue({ id: 11, evenement: 'transaction.approved', traite: false }),
+      create: jest.fn().mockReturnValue({
+        id: 11,
+        evenement: 'transaction.approved',
+        traite: false,
+      }),
       save: jest.fn().mockImplementation(async (w: unknown) => w),
       update: jest.fn(),
     };
@@ -800,20 +905,24 @@ describe('WebhookFedapayService', () => {
     const txRepo = {
       findOne: jest.fn().mockResolvedValue(txDejaReussie),
       manager: {
-        transaction: jest.fn().mockImplementation(async (cb: (m: unknown) => unknown) => {
-          const mgr = {
-            getRepository: (entity: { name: string }) => {
-              if (entity.name === Transaction.name) {
-                return { findOne: jest.fn().mockResolvedValue(txDejaReussie) };
-              }
-              if (entity.name === WebhookFedapay.name) {
-                return { update: jest.fn() };
-              }
-              return {};
-            },
-          };
-          return cb(mgr);
-        }),
+        transaction: jest
+          .fn()
+          .mockImplementation(async (cb: (m: unknown) => unknown) => {
+            const mgr = {
+              getRepository: (entity: { name: string }) => {
+                if (entity.name === Transaction.name) {
+                  return {
+                    findOne: jest.fn().mockResolvedValue(txDejaReussie),
+                  };
+                }
+                if (entity.name === WebhookFedapay.name) {
+                  return { update: jest.fn() };
+                }
+                return {};
+              },
+            };
+            return cb(mgr);
+          }),
       },
     };
 
@@ -823,7 +932,9 @@ describe('WebhookFedapayService', () => {
       txService: { confirmer: confirmerMock, echouer: jest.fn() },
     });
 
-    const corps = Buffer.from(JSON.stringify({ event: 'transaction.approved', id: 12345 }));
+    const corps = Buffer.from(
+      JSON.stringify({ event: 'transaction.approved', id: 12345 }),
+    );
     await svc.traiter(corps, 'sig');
 
     // confirmer ne doit pas etre rappele

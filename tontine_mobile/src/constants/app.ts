@@ -28,7 +28,7 @@ export const MOYEN_PAIEMENT = "MTN Mobile Money";
 export const MENTION_FRAIS_FEDAPAY = "Les frais FedaPay sont à votre charge.";
 
 /** Délai maximum d'une requête réseau (ms). */
-export const DELAI_TIMEOUT_REQUETE_MS = 15000;
+export const DELAI_TIMEOUT_REQUETE_MS = 20000;
 
 /** Polling du statut d'une transaction : intervalle (ms). */
 export const POLLING_TRANSACTION_INTERVAL_MS = 3000;

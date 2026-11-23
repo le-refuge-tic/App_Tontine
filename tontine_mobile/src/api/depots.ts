@@ -1,20 +1,23 @@
 import { EST_MODE_DEMO } from "@/constants/env";
 import { delaiDemo, cycleDemo } from "./fixtures";
-import { ErreurApi, requete } from "./client";
+import { requete } from "./client";
 import { preparerTransactionDemo } from "./transactions";
 import type { Transaction } from "./types";
 
 export interface ResultatDepot {
   transaction: Transaction;
-  /** URL de paiement FedaPay à ouvrir (null en mode démo / si non nécessaire). */
+  /** URL de paiement FedaPay à ouvrir dans le navigateur intégré. Null en démo ou double-clic. */
   urlPaiement: string | null;
 }
 
 /**
- * POST /depots — lance un dépôt (cotisation / rattrapage de jours).
- * TODO(backend) : la route /depots n'existe pas encore. En mode réel, lève une
- * erreur "Fonctionnalité pas encore disponible". En mode démo, fabrique une
- * transaction à partir des jours sélectionnés (somme de leurs montantDu).
+ * POST /depots — lance un dépôt (cotisation du jour ou rattrapage).
+ *
+ * Sans `jourIds` ou tableau vide → paie le jour d'aujourd'hui.
+ * Avec `jourIds`                → rattrapage des jours fournis.
+ *
+ * Le serveur renvoie { transaction, urlPaiement }. `urlPaiement` peut être null
+ * si une transaction en_attente identique a été réutilisée (anti-double-clic).
  */
 export async function lancerDepot(jourIds: number[] = []): Promise<ResultatDepot> {
   if (EST_MODE_DEMO) {
@@ -22,10 +25,15 @@ export async function lancerDepot(jourIds: number[] = []): Promise<ResultatDepot
     const montant = cycleDemo.jours
       .filter((j) => jourIds.includes(j.id))
       .reduce((s, j) => s + j.montantDu, 0);
-    const transaction = preparerTransactionDemo(9001, montant, "depot");
+    const transaction = preparerTransactionDemo(9001, montant > 0 ? montant : cycleDemo.miseBase, "depot");
     return { transaction, urlPaiement: null };
   }
-  // TODO(backend) : implémenter POST /depots côté serveur.
-  void requete; // réservé pour la future implémentation.
-  throw new ErreurApi("Fonctionnalité pas encore disponible.");
+
+  const body: { jourIds?: number[] } = {};
+  if (jourIds.length > 0) body.jourIds = jourIds;
+
+  return requete<ResultatDepot>("/depots", {
+    method: "POST",
+    body,
+  });
 }

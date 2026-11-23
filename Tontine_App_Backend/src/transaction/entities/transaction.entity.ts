@@ -12,6 +12,7 @@ import { StatutTransaction, TypeTransaction } from '../../common/enums';
 import { Membre } from '../../membre/entities/membre.entity';
 import { EcritureComptable } from '../../ecriture-comptable/entities/ecriture-comptable.entity';
 import { RetraitEpargne } from '../../retrait-epargne/entities/retrait-epargne.entity';
+import { Epargne } from '../../epargne/entities/epargne.entity';
 
 /**
  * Transaction Mobile Money (dépôt / retrait). Création publique interdite :
@@ -51,6 +52,25 @@ export class Transaction {
    */
   @Column({ type: 'jsonb', nullable: true })
   joursCibles!: number[] | null;
+
+  /**
+   * Indique si ce retrait est un retrait total du solde disponible.
+   * Faux pour les dépôts et les retraits partiels.
+   */
+  @Column({ type: 'boolean', default: false })
+  estRetraitTotal!: boolean;
+
+  /**
+   * Épargne ciblée par cette transaction (dépôt ou retrait d'épargne).
+   * Null pour les opérations de cotisation. Sert d'aiguillage dans
+   * `TransactionService.confirmer()` : si non null, la transaction suit la
+   * logique épargne (dépôt ou retrait) au lieu de la logique cotisation.
+   */
+  @ManyToOne(() => Epargne, (e) => e.transactions, {
+    nullable: true,
+    onDelete: 'RESTRICT',
+  })
+  epargne!: Epargne | null;
 
   @CreateDateColumn({ type: 'timestamptz' })
   dateOperation!: Date;

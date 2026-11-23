@@ -7,6 +7,34 @@
  * lit les composants en UTC. Le résultat est insensible au fuseau du serveur.
  */
 
+/**
+ * Retourne le mois calendaire d'un instant donné dans le fuseau Africa/Porto-Novo
+ * (UTC+1 fixe, pas d'heure d'été), au format `AAAA-MM`.
+ *
+ * Cette fonction est la contrepartie TypeScript de l'expression SQL
+ * `TO_CHAR(e.date AT TIME ZONE 'Africa/Porto-Novo', 'YYYY-MM')`.
+ * Elle permet de tester la logique de regroupement sans base de données.
+ *
+ * @example
+ * // 2026-11-30 22:30 UTC  →  2026-11-30 23:30 Porto-Novo  →  "2026-11"
+ * moisPortoNovo(new Date('2026-11-30T22:30:00Z')) // "2026-11"
+ *
+ * // 2026-11-30 23:30 UTC  →  2026-12-01 00:30 Porto-Novo  →  "2026-12"
+ * moisPortoNovo(new Date('2026-11-30T23:30:00Z')) // "2026-12"
+ */
+export function moisPortoNovo(instant: Date): string {
+  // Africa/Porto-Novo = UTC+1 fixe (pas d'heure d'été).
+  // On utilise Intl.DateTimeFormat pour être robuste vis-à-vis des variations
+  // de timezone du serveur Node.js.
+  const formatter = new Intl.DateTimeFormat('fr-CA', {
+    timeZone: 'Africa/Porto-Novo',
+    year: 'numeric',
+    month: '2-digit',
+  });
+  // fr-CA produit "AAAA-MM" directement.
+  return formatter.format(instant);
+}
+
 /** Décalage horaire du Bénin par rapport à UTC, en minutes (UTC+1). */
 export const DECALAGE_BENIN_MINUTES = 60;
 

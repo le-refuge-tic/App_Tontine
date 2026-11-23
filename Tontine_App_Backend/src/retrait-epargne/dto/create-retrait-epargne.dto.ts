@@ -1,27 +1,40 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsInt, IsNumber, Min } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsBoolean,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsPositive,
+  ValidateIf,
+} from 'class-validator';
 
+/**
+ * Corps de `POST /epargnes/:id/retraits` : initie un retrait d'épargne vers
+ * Mobile Money. Même sécurité que les retraits de cotisation : `montant` XOR
+ * `total`, et un jeton de retrait à usage unique (vérifié et consommé dans la
+ * même transaction DB que la création).
+ */
 export class CreateRetraitEpargneDto {
-  @ApiProperty({ description: 'Épargne retirée.' })
+  @ApiPropertyOptional({
+    description: 'Montant à retirer (FCFA). Exclusif avec `total`.',
+  })
+  @ValidateIf((o: CreateRetraitEpargneDto) => !o.total)
   @IsInt()
-  epargneId!: number;
+  @IsPositive()
+  montant?: number;
 
-  @ApiProperty({ example: 10000, description: 'Montant retiré (FCFA).' })
-  @IsInt()
-  @Min(0)
-  montant!: number;
+  @ApiPropertyOptional({
+    description: 'Retrait total du solde de cette épargne. Exclusif avec `montant`.',
+  })
+  @ValidateIf((o: CreateRetraitEpargneDto) => !o.montant)
+  @IsBoolean()
+  @IsOptional()
+  total?: boolean;
 
-  @ApiProperty({ example: 2.75, description: 'Taux appliqué (numeric 5,2).' })
-  @IsNumber()
-  @Min(0)
-  tauxApplique!: number;
-
-  @ApiProperty({ example: 275, description: 'Montant retenu (FCFA).' })
-  @IsInt()
-  @Min(0)
-  montantRetenu!: number;
-
-  @ApiProperty({ description: 'Transaction qui paie le retrait (OneToOne obligatoire).' })
-  @IsInt()
-  transactionId!: number;
+  @ApiProperty({
+    description:
+      'Jeton de retrait JWT (audience tontine-retrait, durée 5 min, usage unique).',
+  })
+  @IsString()
+  jetonRetrait!: string;
 }

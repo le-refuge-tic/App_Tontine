@@ -3,10 +3,12 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { PortefeuilleService } from './portefeuille.service';
 import { Portefeuille } from './entities/portefeuille.entity';
 import { EcritureComptable } from '../ecriture-comptable/entities/ecriture-comptable.entity';
+import { Transaction } from '../transaction/entities/transaction.entity';
 import { TypeEcriture } from '../common/enums';
 
 const PORTEFEUILLE_REPO_TOKEN = `${Portefeuille.name}Repository`;
 const ECRITURE_REPO_TOKEN = `${EcritureComptable.name}Repository`;
+const TX_REPO_TOKEN = `${Transaction.name}Repository`;
 
 describe('PortefeuilleService', () => {
   let service: PortefeuilleService;
@@ -27,16 +29,32 @@ describe('PortefeuilleService', () => {
     createQueryBuilder: jest.fn(() => ecQb),
   };
 
+  // QueryBuilder pour les retraits en attente (retourne 0 par défaut).
+  const txQb = {
+    select: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    getRawOne: jest.fn().mockResolvedValue({ total: '0' }),
+  };
+  const txRepo = {
+    createQueryBuilder: jest.fn(() => txQb),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
     ecQb.select.mockReturnThis();
     ecQb.where.mockReturnThis();
     ecQb.andWhere.mockReturnThis();
+    txQb.select.mockReturnThis();
+    txQb.where.mockReturnThis();
+    txQb.andWhere.mockReturnThis();
+    txQb.getRawOne.mockResolvedValue({ total: '0' });
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PortefeuilleService,
         { provide: PORTEFEUILLE_REPO_TOKEN, useValue: portefeuilleRepo },
         { provide: ECRITURE_REPO_TOKEN, useValue: ecritureRepo },
+        { provide: TX_REPO_TOKEN, useValue: txRepo },
       ],
     }).compile();
     service = module.get(PortefeuilleService);

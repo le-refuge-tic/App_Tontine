@@ -1,4 +1,4 @@
-import { DataSourceOptions } from 'typeorm';
+﻿import { DataSourceOptions } from 'typeorm';
 import { SnakeNamingStrategy } from '../common/naming-strategies/snake-naming.strategy';
 import { DbConfig } from './configuration';
 import { Membre } from '../membre/entities/membre.entity';
@@ -18,8 +18,9 @@ import { ParametreSysteme } from '../parametre-systeme/entities/parametre-system
 import { Notification } from '../notification/entities/notification.entity';
 import { WebhookFedapay } from '../webhook-fedapay/entities/webhook-fedapay.entity';
 import { JetonRafraichissement } from '../jeton-rafraichissement/entities/jeton-rafraichissement.entity';
+import { JetonRetraitConsomme } from '../jeton-retrait-consomme/entities/jeton-retrait-consomme.entity';
 
-/** Liste centralisée des 17 entités du projet (16 métier + 1 technique). */
+/** Liste centralisée des 18 entités du projet (16 métier + 2 techniques). */
 export const entities = [
   Membre,
   Souscription,
@@ -38,6 +39,7 @@ export const entities = [
   Notification,
   WebhookFedapay,
   JetonRafraichissement,
+  JetonRetraitConsomme,
 ];
 
 /**
@@ -56,6 +58,7 @@ export function buildDataSourceOptions(db: DbConfig): DataSourceOptions {
     synchronize: false,
     namingStrategy: new SnakeNamingStrategy(),
     entities,
-    logging: process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
+    logging:
+      process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
   };
 }

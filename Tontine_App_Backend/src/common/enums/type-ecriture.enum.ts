@@ -18,4 +18,11 @@ export enum TypeEcriture {
   GAGE_PRELEVE = 'gage_preleve',
   PRET_OCTROYE = 'pret_octroye',
   REMBOURSEMENT = 'remboursement',
+  /**
+   * Libération des fonds de caisse retenus lors d'un retrait total.
+   * Écriture débit sur soldeCotisation pour annuler le résidu non retirable
+   * (fondsCaisseRetenu + soldeBloque). Aucune ligne dans CaisseApplication :
+   * les fonds y sont déjà acquis à l'application.
+   */
+  LIBERATION_FONDS = 'liberation_fonds',
 }

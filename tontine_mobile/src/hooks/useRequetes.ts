@@ -1,5 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { auth, cycles, depots, ecritures, notifications, retraits, souscriptions, tableauBord } from "@/api";
+import {
+  auth,
+  cycles,
+  depots,
+  ecritures,
+  notifications,
+  retraits,
+  souscriptions,
+  tableauBord,
+  rapport,
+  transactions,
+} from "@/api";
 import type { Regularite } from "@/api/types";
 import { useAuth } from "./useAuth";
 
@@ -8,8 +19,11 @@ export const clesRequetes = {
   souscriptionActive: ["souscription", "active"] as const,
   tableauBord: ["tableauBord"] as const,
   cycleEnCours: ["cycle", "enCours"] as const,
+  joursRattrapables: ["cycle", "joursRattrapables"] as const,
   ecritures: ["ecritures"] as const,
   notifications: ["notifications"] as const,
+  rapport: (mois: string, type: string) => ["rapport", mois, type] as const,
+  transaction: (id: number) => ["transaction", id] as const,
 };
 
 // ── Lecture ────────────────────────────────────────────────────────────────
@@ -32,12 +46,40 @@ export function useCycleEnCours() {
   });
 }
 
+export function useJoursRattrapables() {
+  const { estAuthentifie } = useAuth();
+  return useQuery({
+    queryKey: clesRequetes.joursRattrapables,
+    queryFn: () => cycles.obtenirJoursRattrapables(),
+    enabled: estAuthentifie,
+  });
+}
+
 export function useEcritures() {
   const { estAuthentifie } = useAuth();
   return useQuery({
     queryKey: clesRequetes.ecritures,
     queryFn: () => ecritures.listerEcritures(),
     enabled: estAuthentifie,
+  });
+}
+
+export function useRapport(mois: string, type: "tout" | "cotisations" | "retraits") {
+  const { estAuthentifie } = useAuth();
+  return useQuery({
+    queryKey: clesRequetes.rapport(mois, type),
+    queryFn: () => rapport.obtenirRapport(mois, type),
+    enabled: estAuthentifie && !!mois,
+  });
+}
+
+export function useTransaction(id: number | null) {
+  const { estAuthentifie } = useAuth();
+  return useQuery({
+    queryKey: clesRequetes.transaction(id ?? 0),
+    queryFn: () => transactions.obtenirTransaction(id!),
+    enabled: estAuthentifie && id !== null,
+    refetchInterval: false, // le polling est géré manuellement dans les écrans
   });
 }
 
@@ -64,7 +106,7 @@ export function useEtatSouscription(): "inconnu" | "oui" | "non" {
   return q.data === null ? "non" : "oui";
 }
 
-// ── Écritures ──────────────────────────────────────────────────────────────
+// ── Invalidation ──────────────────────────────────────────────────────────
 
 /** Invalide toutes les requêtes dépendant des données du membre (après un paiement/retrait). */
 export function useInvaliderDonnees() {
@@ -72,8 +114,10 @@ export function useInvaliderDonnees() {
   return () => {
     void qc.invalidateQueries({ queryKey: clesRequetes.tableauBord });
     void qc.invalidateQueries({ queryKey: clesRequetes.cycleEnCours });
+    void qc.invalidateQueries({ queryKey: clesRequetes.joursRattrapables });
     void qc.invalidateQueries({ queryKey: clesRequetes.ecritures });
     void qc.invalidateQueries({ queryKey: clesRequetes.souscriptionActive });
+    void qc.invalidateQueries({ queryKey: ["rapport"] });
   };
 }
 

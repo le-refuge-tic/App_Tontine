@@ -11,9 +11,10 @@ import { LigneOperation } from "@/components/LigneOperation";
 import { Icone } from "@/components/Icone";
 import { EtatVide } from "@/components/EtatVide";
 import { EtatErreur } from "@/components/EtatErreur";
-import { CarteSquelette, LigneSquelette, ListeSquelette, Squelette } from "@/components/Squelette";
+import { CarteSquelette, ListeSquelette, Squelette } from "@/components/Squelette";
 import { theme } from "@/theme";
 import { TOTAL_JOURS_CYCLE } from "@/constants/app";
+import { EST_MODE_DEMO } from "@/constants/env";
 import { useAuth } from "@/hooks/useAuth";
 import { useTableauDeBord, useCycleEnCours, useEcritures, useNotifications } from "@/hooks/useRequetes";
 import { formaterFCFA } from "@/utils/formaterFCFA";
@@ -82,7 +83,7 @@ export default function Accueil() {
         {tdb.data ? (
           <View style={styles.repartition}>
             <BarreRepartition
-              retirable={tdb.data.retirable ?? tdb.data.soldeCotisation}
+              retirable={tdb.data.retirable}
               fondsCaisse={tdb.data.fondsCaisseRetenu}
               bloque={tdb.data.soldeBloque}
             />
@@ -150,12 +151,20 @@ export default function Accueil() {
 }
 
 function EnTete({ prenom, salutation, nonLues }: { prenom: string; salutation: string; nonLues: number }) {
+  const ouvrirOutilsTest = () => {
+    // Outils de test : uniquement en mode dev + mode réel.
+    if (__DEV__ && !EST_MODE_DEMO) {
+      hapticSelection();
+      router.push("/outils-test" as never);
+    }
+  };
+
   return (
     <View style={styles.entete}>
-      <View style={styles.enteteGauche}>
+      <Pressable onLongPress={ouvrirOutilsTest} delayLongPress={800} hitSlop={4} style={styles.enteteGauche}>
         <Text style={[theme.typographie.corps2, { color: theme.couleurs.texteSecondaire }]} maxFontSizeMultiplier={1.2}>{salutation},</Text>
         <Text style={[theme.typographie.titre3, { color: theme.couleurs.textePrimaire }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>{prenom}</Text>
-      </View>
+      </Pressable>
       <View style={styles.enteteDroite}>
         <Pressable onPress={() => router.push("/notifications")} hitSlop={10} style={styles.cloche} accessibilityLabel="Notifications">
           <Icone nom="notifications-outline" taille={24} couleur={theme.couleurs.textePrimaire} />

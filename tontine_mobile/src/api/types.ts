@@ -3,6 +3,17 @@
 // (les relations ne sont pas chargées par défaut côté serveur).
 
 export type Regularite = "jour" | "semaine" | "mois";
+
+/** Résultat de GET /rapport?mois=AAAA-MM&type=... */
+export interface RapportMensuel {
+  mois: string;
+  ecritures: EcritureComptable[];
+  totaux: {
+    cotise: number;
+    retire: number;
+    fondsRetenu: number;
+  };
+}
 export type StatutSouscription = "active" | "cloturee";
 export type StatutCycle = "en_cours" | "termine";
 export type StatutJourCotisation = "a_payer" | "paye" | "perdu" | "rattrape";
@@ -78,6 +89,15 @@ export interface Portefeuille {
   soldeBloque: number;
 }
 
+/** Vue agrégée renvoyée par GET /portefeuilles/moi (calculs côté serveur). */
+export interface PortefeuilleVue {
+  soldeCotisation: number;
+  soldeEpargne: number;
+  soldeBloque: number;
+  fondsCaisseRetenu: number;
+  retirable: number;
+}
+
 export interface Transaction {
   id: number;
   type: TypeTransaction;
@@ -116,13 +136,13 @@ export interface ResultatAuth extends PaireJetons {
 }
 
 /**
- * Vue agrégée du portefeuille affichée sur l'accueil. `retirable` vaut null
- * tant que la route correspondante n'existe pas côté backend (TODO backend).
+ * Vue agrégée du portefeuille affichée sur l'accueil. Désormais fournie
+ * directement par GET /portefeuilles/moi ; `retirable` est toujours un number.
  */
 export interface TableauDeBord {
   soldeCotisation: number;
   soldeEpargne: number;
   soldeBloque: number;
   fondsCaisseRetenu: number;
-  retirable: number | null;
+  retirable: number;
 }

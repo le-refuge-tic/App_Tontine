@@ -34,6 +34,18 @@ export class RetraitEpargne {
   @Column({ type: 'int' })
   montantRetenu!: number;
 
+  /**
+   * Vrai si le retrait a lieu AVANT la date d'échéance (pénalité 5 %),
+   * faux à la date ou après (retenue 2,75 %).
+   *
+   * Décidé à la création (comparaison `dateBeninISO() < dateEcheance`) et
+   * mémorisé ici pour que la confirmation webhook choisisse le type d'écriture
+   * (`penalite` vs `retenue_epargne`) de façon robuste, indépendamment d'une
+   * éventuelle évolution des paramètres système entre-temps.
+   */
+  @Column({ type: 'boolean', default: false })
+  estAnticipe!: boolean;
+
   @ManyToOne(() => Epargne, (e) => e.retraits, {
     nullable: false,
     onDelete: 'RESTRICT',

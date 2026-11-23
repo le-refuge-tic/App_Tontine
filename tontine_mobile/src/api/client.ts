@@ -2,6 +2,14 @@ import { API_URL } from "@/constants/env";
 import { DELAI_TIMEOUT_REQUETE_MS } from "@/constants/app";
 import { getAccessToken, getRefreshToken, setJetons, effacerJetons } from "./jetons";
 
+// Garde URL : lève une erreur claire si la variable n'est pas configurée.
+if (!API_URL || API_URL.includes("IP_DU_PC")) {
+  console.warn(
+    "[API] EXPO_PUBLIC_API_URL est vide ou contient « IP_DU_PC ». " +
+      "Remplacez-la par l'adresse IP réelle du serveur dans .env (ex. http://192.168.1.42:3000/api/v1).",
+  );
+}
+
 /** Erreur normalisée : message en français (du serveur ou par défaut), statut HTTP éventuel. */
 export class ErreurApi extends Error {
   constructor(message: string, public statut?: number) {
@@ -26,6 +34,10 @@ function messageParDefaut(statut: number): string {
       return "Action non autorisée.";
     case 404:
       return "Ressource introuvable.";
+    case 409:
+      return "Opération déjà en cours ou en conflit.";
+    case 422:
+      return "Montant ou données non valides.";
     case 429:
       return "Trop de tentatives. Patientez un instant.";
     case 500:
@@ -87,7 +99,7 @@ async function rafraichirJeton(): Promise<string> {
     } catch (e) {
       if (e instanceof ErreurApi) throw e;
       if (estAbort(e)) throw new ErreurApi("Le serveur met trop de temps à répondre.");
-      throw new ErreurApi("Connexion impossible. Vérifiez votre réseau.");
+      throw new ErreurApi("Impossible de joindre le serveur. Vérifiez le Wi-Fi et l'adresse du serveur.");
     } finally {
       clearTimeout(t);
       refreshEnCours = null;
@@ -106,6 +118,14 @@ export interface OptionsRequete {
 }
 
 async function executer<T>(chemin: string, options: OptionsRequete, dejaRafraichi: boolean): Promise<T> {
+  // Vérifie la configuration de l'URL avant d'envoyer la requête.
+  if (!API_URL || API_URL.includes("IP_DU_PC")) {
+    throw new ErreurApi(
+      "L'adresse du serveur n'est pas configurée. " +
+        "Renseignez EXPO_PUBLIC_API_URL dans .env (ex. http://192.168.1.42:3000/api/v1).",
+    );
+  }
+
   const { method = "GET", body, sansAuth = false, brut = false } = options;
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -165,7 +185,7 @@ async function executer<T>(chemin: string, options: OptionsRequete, dejaRafraich
   } catch (e) {
     if (e instanceof ErreurApi) throw e;
     if (estAbort(e)) throw new ErreurApi("Le serveur met trop de temps à répondre.");
-    throw new ErreurApi("Connexion impossible. Vérifiez votre réseau.");
+    throw new ErreurApi("Impossible de joindre le serveur. Vérifiez le Wi-Fi et l'adresse du serveur.");
   } finally {
     clearTimeout(t);
   }

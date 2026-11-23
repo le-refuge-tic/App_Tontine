@@ -15,6 +15,12 @@ export class DevController {
 
   @ApiOperation({
     summary: '[DEV] Simuler un webhook FedaPay sans vérification de signature',
+    description:
+      'Simule le succès (`approuve`) ou l\'échec (`refuse`) d\'une transaction ' +
+      'FedaPay. Fonctionne pour les dépôts et retraits de cotisation ET ' +
+      'd\'épargne : le routage est automatique via `TransactionService.confirmer()` ' +
+      '(aiguillage par `epargne_id`). Passer simplement l\'identifiant interne ' +
+      'de la transaction concernée.',
   })
   @Public()
   @Post('simuler-webhook')

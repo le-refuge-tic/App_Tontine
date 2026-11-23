@@ -32,6 +32,7 @@ import { WebhookFedapayModule } from './webhook-fedapay/webhook-fedapay.module';
 import { FedapayModule } from './fedapay/fedapay.module';
 import { DepotModule } from './depot/depot.module';
 import { RapportModule } from './rapport/rapport.module';
+import { RetraitModule } from './retrait/retrait.module';
 import { DevModule } from './dev/dev.module';
 
 const DEFAULT_DB: DbConfig = {
@@ -92,6 +93,7 @@ const modulesDevSeulement =
     FedapayModule,
     DepotModule,
     RapportModule,
+    RetraitModule,
     ...modulesDevSeulement,
   ],
   controllers: [AppController],

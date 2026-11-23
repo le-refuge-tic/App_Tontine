@@ -3,7 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Portefeuille } from './entities/portefeuille.entity';
 import { EcritureComptable } from '../ecriture-comptable/entities/ecriture-comptable.entity';
-import { TypeEcriture } from '../common/enums';
+import { Transaction } from '../transaction/entities/transaction.entity';
+import {
+  StatutTransaction,
+  TypeEcriture,
+  TypeTransaction,
+} from '../common/enums';
 
 export interface PortefeuilleVue {
   soldeCotisation: number;
@@ -20,6 +25,8 @@ export class PortefeuilleService {
     private readonly repo: Repository<Portefeuille>,
     @InjectRepository(EcritureComptable)
     private readonly ecritureRepo: Repository<EcritureComptable>,
+    @InjectRepository(Transaction)
+    private readonly txRepo: Repository<Transaction>,
   ) {}
 
   findAll(membreId?: number): Promise<Portefeuille[]> {
@@ -44,7 +51,8 @@ export class PortefeuilleService {
    * Vue du portefeuille du membre connecté.
    *  - `fondsCaisseRetenu` = somme des écritures `fonds_caisse` du membre
    *    (montant réellement retenu, 0 tant qu'aucun dépôt n'a eu lieu).
-   *  - `retirable` = max(0, soldeCotisation − fondsCaisseRetenu − soldeBloque).
+   *  - `retirable` = max(0, soldeCotisation − fondsCaisseRetenu − soldeBloque
+   *                        − retraitsEnAttente).
    *
    * Sans aucune écriture, tout vaut 0 sans erreur.
    */
@@ -57,11 +65,28 @@ export class PortefeuilleService {
     }
 
     const fondsCaisseRetenu = await this.fondsCaisseRetenuDuMembre(membreId);
+
+    // Retraits en attente : on les déduit du retirable pour que le membre ne
+    // puisse pas initier deux retraits simultanés.
+    // NB : `epargne_id IS NULL` isole les retraits de cotisation des retraits
+    // d'épargne (type `retrait` partagé). Un retrait d'épargne en attente ne
+    // doit pas réduire le retirable de cotisation.
+    const retraitReserveResult = await this.txRepo
+      .createQueryBuilder('tx')
+      .select('COALESCE(SUM(tx.montant), 0)', 'total')
+      .where('tx.membre_id = :membreId', { membreId })
+      .andWhere('tx.type = :type', { type: TypeTransaction.RETRAIT })
+      .andWhere('tx.statut = :statut', { statut: StatutTransaction.EN_ATTENTE })
+      .andWhere('tx.epargne_id IS NULL')
+      .getRawOne<{ total: string }>();
+    const retraitReserve = Number(retraitReserveResult?.total ?? 0);
+
     const retirable = Math.max(
       0,
       portefeuille.soldeCotisation -
         fondsCaisseRetenu -
-        portefeuille.soldeBloque,
+        portefeuille.soldeBloque -
+        retraitReserve,
     );
 
     return {

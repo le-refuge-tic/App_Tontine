@@ -1,9 +1,9 @@
 import { EST_MODE_DEMO } from "@/constants/env";
 import { delaiDemo, souscriptionDemo } from "./fixtures";
-import { requete } from "./client";
+import { requete, ErreurApi } from "./client";
 import type { Regularite, Souscription } from "./types";
 
-/** GET /souscriptions — souscriptions du membre connecté. */
+/** GET /souscriptions — toutes les souscriptions du membre connecté. */
 export async function listerSouscriptions(): Promise<Souscription[]> {
   if (EST_MODE_DEMO) {
     await delaiDemo();
@@ -12,10 +12,21 @@ export async function listerSouscriptions(): Promise<Souscription[]> {
   return requete<Souscription[]>("/souscriptions");
 }
 
-/** Souscription active du membre (filtrée côté client depuis GET /souscriptions). */
+/**
+ * GET /souscriptions/active — souscription active du membre connecté.
+ * Le backend renvoie 404 s'il n'y en a pas ; on retourne null dans ce cas.
+ */
 export async function obtenirSouscriptionActive(): Promise<Souscription | null> {
-  const liste = await listerSouscriptions();
-  return liste.find((s) => s.statut === "active") ?? null;
+  if (EST_MODE_DEMO) {
+    await delaiDemo();
+    return souscriptionDemo;
+  }
+  try {
+    return await requete<Souscription>("/souscriptions/active");
+  } catch (e) {
+    if (e instanceof ErreurApi && e.statut === 404) return null;
+    throw e;
+  }
 }
 
 /**

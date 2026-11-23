@@ -120,7 +120,7 @@ npm run lint:fix           # ESLint avec correction automatique (usage volontair
 | `StatutJourCotisation` | `a_payer`, `paye`, `perdu`, `rattrape` |
 | `TypeTransaction` | `depot`, `retrait` |
 | `StatutTransaction` | `en_attente`, `reussi`, `echoue` |
-| `TypeEcriture` | `cotisation`, `fonds_caisse`, `retrait`, `epargne`, `retrait_epargne`, `penalite`, `retenue_epargne`, `interet`, `gage_bloque`, `gage_libere`, `gage_preleve`, `pret_octroye`, `remboursement` |
+| `TypeEcriture` | `cotisation`, `fonds_caisse`, `retrait`, `epargne`, `retrait_epargne`, `penalite`, `retenue_epargne`, `interet`, `gage_bloque`, `gage_libere`, `gage_preleve`, `pret_octroye`, `remboursement`, `liberation_fonds` |
 | `SensEcriture` | `credit`, `debit` |
 | `Role` | `membre`, `admin` |
 | `StatutMembre` | `actif`, `suspendu`, `cloture` |
@@ -166,7 +166,7 @@ npm run lint:fix           # ESLint avec correction automatique (usage volontair
 ### Routes NON encore implémentées
 | Route attendue | Usage |
 |---|---|
-| `POST /retraits` | Retrait vers Mobile Money |
+| — | Toutes les routes du prompt M1 sont implémentées |
 
 ### Nouveaux modules (prompt 4 — dépôts FedaPay)
 - **`src/fedapay/`** : `IFedapayClient` (interface), `FedapayClientImpl` (SDK fedapay v1.2.5), `FedapayClientFaux` (tests). `generateToken()` est une méthode d'**instance** (`Transaction.retrieve(id).then(t => t.generateToken())`), pas statique.
@@ -225,7 +225,7 @@ npm run lint:fix           # ESLint avec correction automatique (usage volontair
 | Emplacement | Sujet |
 |---|---|
 | `src/fedapay/fedapay-client.impl.ts` | FedaPay attend-il les 10 chiffres locaux (`0197000000`) ou le format international (`22997000000`) dans `phone_number.number` ? |
-| `src/webhook-fedapay/webhook-fedapay.service.ts` | Structure exacte du payload webhook FedaPay : `payload.id` ou `payload.transaction.id` ? À confirmer en sandbox. |
+| `src/webhook-fedapay/webhook-fedapay.service.ts` | Structure payload confirmée en sandbox : `entity.id` contient l'ID FedaPay. Noms des événements payout (`payout.sent` / `payout.failed`) à confirmer lors du premier test retrait. |
 
 ### Paramètres système (table `parametres_systeme`)
 | Clé | Valeur | Description |
@@ -259,6 +259,7 @@ Garde-fous : refuse si `NODE_ENV=production`, refuse si `DB_HOST` n'est pas
 - Expo Router (fichiers dans `src/app/`)
 - @tanstack/react-query (données serveur), fetch natif (pas d'axios)
 - expo-secure-store (jetons), expo-linear-gradient, expo-haptics
+- expo-web-browser (ouverture URL FedaPay)
 - @expo-google-fonts/plus-jakarta-sans (5 graisses), @expo/vector-icons Ionicons
 - react-native-reanimated 4
 
@@ -267,6 +268,7 @@ Garde-fous : refuse si `NODE_ENV=production`, refuse si `DB_HOST` n'est pas
 npx expo start      # démarrer (Expo Go sur Android)
 npx expo start -c   # avec cache vidé (obligatoire après modif app.json)
 npx tsc --noEmit    # vérifier les types
+npx expo lint       # lint ESLint
 ```
 
 ### Variables d'environnement (.env)
@@ -286,13 +288,21 @@ src/
 │   ├── (onboarding)/  choisir-mise
 │   ├── (tabs)/        index (Accueil), cotiser, retirer, rapport
 │   ├── profil.tsx
-│   └── notifications.tsx
+│   ├── notifications.tsx
+│   └── outils-test.tsx  Outils de test (dev + mode réel uniquement, appui long sur prénom)
 ├── api/               Client HTTP + domaines + fixtures démo
-│   ├── client.ts      fetch, single-flight refresh, timeout 15s
+│   ├── client.ts      fetch, single-flight refresh, timeout 20s, garde URL vide
 │   ├── jetons.ts      expo-secure-store (async API)
 │   ├── fixtures.ts    Données démo (cas Koffi)
-│   ├── auth.ts / souscriptions.ts / cycles.ts / ...
-│   └── types.ts       Types exacts des entités backend
+│   ├── auth.ts / souscriptions.ts / cycles.ts / depots.ts / retraits.ts
+│   ├── portefeuille.ts  GET /portefeuilles/moi (retirable calculé côté serveur)
+│   ├── tableauBord.ts   Compose via /portefeuilles/moi
+│   ├── rapport.ts       GET /rapport?mois=AAAA-MM&type=…
+│   ├── transactions.ts
+│   ├── ecritures.ts
+│   ├── notifications.ts
+│   ├── dev.ts           POST /dev/simuler-webhook + testerConnexionServeur()
+│   └── types.ts         Types exacts des entités backend
 ├── components/        Composants réutilisables
 ├── constants/         app.ts (constantes), env.ts (vars d'env)
 ├── hooks/             useAuth.tsx, useRequetes.ts
@@ -300,6 +310,46 @@ src/
 ├── types/             env.d.ts
 └── utils/             formaterFCFA, dates, telephone, haptics
 ```
+
+### Couche API — règles importantes
+- **Un seul point de bascule démo/réel** : chaque fonction dans `src/api/` vérifie `EST_MODE_DEMO` en tête. Les écrans n'ont aucun `if démo`.
+- **Garde URL** : si `EXPO_PUBLIC_API_URL` est vide ou contient `IP_DU_PC`, le client lève une `ErreurApi` explicite avant d'envoyer la requête.
+- **Timeout** : 20 s (constant `DELAI_TIMEOUT_REQUETE_MS`).
+- **Refresh à vol unique** : une seule promesse `refreshEnCours` partagée — si plusieurs requêtes reçoivent un 401 simultanément, une seule tente le refresh et les autres attendent.
+- **Rotation des jetons** : le nouveau `refreshToken` renvoyé par `/auth/rafraichir` est toujours stocké.
+
+### Routes utilisées par écran (mode réel)
+| Écran | Routes backend |
+|---|---|
+| Inscription | `POST /auth/inscription` |
+| Connexion | `POST /auth/connexion` |
+| Accueil | `GET /portefeuilles/moi`, `GET /cycles/en-cours`, `GET /ecritures-comptables` |
+| Choisir ma mise | `GET /souscriptions/active`, `POST /souscriptions` |
+| Cotiser | `GET /cycles/en-cours`, `POST /depots`, `GET /transactions/:id` (polling) |
+| Retirer | `GET /portefeuilles/moi`, `POST /auth/code-retrait/verifier`, `POST /retraits`, `GET /transactions/:id` (polling) |
+| Rapport | `GET /rapport?mois=AAAA-MM&type=…` |
+| Déconnexion | `POST /auth/deconnexion` |
+| Outils test | `POST /dev/simuler-webhook`, `GET /api/docs` (HEAD) |
+
+### Flux dépôt (cotiser)
+1. `POST /depots {}` → `{ transaction, urlPaiement }`
+2. Ouvrir `urlPaiement` via `expo-web-browser` → écran "Validez sur votre téléphone"
+3. Au retour dans l'app → polling `GET /transactions/:id` toutes les 3 s (max 2 min)
+4. `reussi` → "Paiement réussi", invalider React Query ; `echoue` → "Échec" ; timeout → "En attente" + bouton "Vérifier à nouveau"
+5. Anti-double-clic via `useRef` : un seul `POST /depots` à la fois
+
+### Flux retrait
+1. Saisie montant ou "Tout retirer"
+2. `ClavierCode` (4 chiffres) → `POST /auth/code-retrait/verifier` → `jetonRetrait` (texte brut JWT)
+3. `POST /retraits { montant|total, jetonRetrait }` → `{ transaction }`
+4. Polling identique au dépôt
+5. Jeton à usage unique : si 401/409/422/503, fermer la feuille et afficher l'erreur (ne pas réessayer avec le même jeton)
+
+### Écran outils de test (`/outils-test`)
+- Visible uniquement si `__DEV__ === true` ET `EXPO_PUBLIC_MODE_DEMO=false`
+- Accès : appui long (800 ms) sur le prénom en haut de l'accueil
+- Fonctions : afficher l'URL API, tester la connectivité serveur, afficher l'état de session, simuler un webhook FedaPay (approuvé ou refusé) via `POST /dev/simuler-webhook`
+- Absent de l'APK de production (`__DEV__` = false en prod)
 
 ### Navigation (GateNavigation dans _layout.tsx)
 | État session | Rôle | État souscription | Segment courant | Action |
@@ -356,6 +406,7 @@ Police : Plus Jakarta Sans (400/500/600/700/800). Montants en 800 (ExtraBold).
   `Animated.View`) — nécessaire pour que `flex: 1` fonctionne correctement sur Android.
 - **`POST /souscriptions`** n'attend que `{ miseBase, regularite }` — le membre
   est déduit du jeton JWT côté serveur. Ne pas envoyer `membreId` ni `dateDemarrage`.
+- **`POST /depots`** sans `jourIds` (ou `{}`) → le backend choisit lui-même le jour `a_payer` d'aujourd'hui. Ne jamais envoyer l'ID du jour courant depuis le mobile.
 
 ### Mode démo (EXPO_PUBLIC_MODE_DEMO=true)
 Cas de **Koffi Adjovi**, mise 500 F/jour, cycle novembre 2026 :
@@ -387,17 +438,12 @@ Cas de **Koffi Adjovi**, mise 500 F/jour, cycle novembre 2026 :
 
 ## 7. Ce qui reste à implémenter (prochaines sessions)
 
-### Backend (priorité haute)
-1. **Retrait** : `POST /retraits`
-   - Vérifie le jeton de retrait (audience `tontine-retrait`)
-   - Calcule `retirable` via `retirableDuMois()`
-   - Crée une `Transaction` FedaPay de type `retrait`
-   - Si retrait total : remet `soldeCotisation` à 0 (le `fondsCaisseRetenu` reste acquis à l'application)
+### Backend
+- Rien de bloquant pour le flux de base. Prochaine priorité : prêts/garanties (prompt 7).
 
-### Mobile (priorité haute)
-- Brancher l'écran **Cotiser** sur `POST /depots` + polling `GET /transactions/:id` + affichage `urlPaiement` dans WebView
-- Brancher l'écran **Retirer** sur `POST /retraits` dès que la route existe
+### Mobile
 - Remplacer `TODO(logo)` par un vrai logo
+- Notifications push (optionnel)
 
 ---
 
@@ -424,3 +470,50 @@ Cas de **Koffi Adjovi**, mise 500 F/jour, cycle novembre 2026 :
 | Connexion mobile bloquée : "numéro invalide" | `normaliserPhone` backend ne normalisait pas vers `229`+10 → formats incohérents entre Swagger et mobile | `normaliserPhone` convertit maintenant 10 chiffres locaux → `229`+10 |
 | Admin redirigé vers choisir-mise | `GateNavigation` ne vérifiait pas le rôle | `GateNavigation` exclut l'admin de la redirection vers `choisir-mise` |
 | Création souscription refusée (400) | Mobile envoyait `membreId` et `dateDemarrage` inconnus du nouveau `CreerSouscriptionDto` | Corps réduit à `{ miseBase, regularite }` dans `souscriptions.ts` |
+| **[Prompt M1]** `POST /depots` refusait avec "jour non rattrapable" | Mobile envoyait l'ID du jour courant même sans sélection manuelle ; ce jour pouvait être déjà payé côté backend | `cotiser.tsx` envoie désormais `{}` sans `jourIds` → le backend choisit lui-même le jour `a_payer` |
+| **[Prompt M1]** `RetraitService` ne démarre pas — `JwtService` introuvable | `AuthModule` exportait `AuthService` et `JwtStrategy` mais pas `JwtModule` | Ajout de `JwtModule` dans les `exports` de `AuthModule` |
+| **[Prompt M1]** `GET /rapport` plante — `date ~~ unknown` | `cycle.date_debut` est de type `DATE` PostgreSQL, TypeORM passait le paramètre `LIKE` comme `unknown` sans cast | Requête corrigée : `CAST(cycle.date_debut AS text) LIKE :moisLike` |
+| **[Prompt M1]** Webhook FedaPay ignoré — "sans idFedapay dans le payload" | `extraireIdFedapay` cherchait `payload.id` mais FedaPay envoie `{ name, object: "transaction", entity: { id: 548479, ... } }` | `extraireIdFedapay` lit `rawPayload.entity.id` en priorité ; `rawPayload` parsé depuis le corps brut avant le SDK |
+| **[Prompt M1]** `recalculerPortefeuille` plante — `liberation_fonds` invalide | `liberation_fonds` présent dans l'enum TypeScript mais absent de l'enum PostgreSQL en base (migration manquante) | `ALTER TYPE ecritures_comptables_type_enum ADD VALUE 'liberation_fonds'` appliqué + migration `1795400000000-AjoutLiberationFonds.ts` créée |
+
+---
+
+## 9. Notes de test FedaPay sandbox
+
+### Configuration tunnel cloudflared
+```bash
+cloudflared tunnel --url http://localhost:3000
+# → copier l'URL https://xxxx.trycloudflare.com
+```
+Mettre à jour `APP_PUBLIC_URL` dans `Tontine_App_Backend/.env` puis redémarrer le backend.
+L'URL change à chaque redémarrage du tunnel (sauf si tunnel nommé avec compte Cloudflare).
+
+### Webhook FedaPay sandbox
+- Dashboard : [sandbox.fedapay.com](https://sandbox.fedapay.com) → API, Évènements, Logs et Webhooks
+- URL webhook : `https://xxxx.trycloudflare.com/api/v1/webhooks/fedapay`
+- Événements à activer : `transaction.approved`, `transaction.declined`
+- Secret webhook → `FEDAPAY_WEBHOOK_SECRET` dans le `.env` backend
+
+### Structure payload webhook FedaPay (confirmée en sandbox)
+```json
+{
+  "name": "transaction.approved",
+  "object": "transaction",
+  "entity": { "id": 548479, "status": "approved", "amount": 1500, ... }
+}
+```
+L'ID FedaPay est dans **`entity.id`**, pas à la racine ni dans `object`.
+Le service `WebhookFedapayService.extraireIdFedapay()` lit `rawPayload.entity.id` en priorité.
+
+### Approuver une transaction en sandbox
+FedaPay sandbox **ne propose pas de bouton "Approuver"** dans le dashboard pour les transactions de redirection. Deux options :
+1. **Outils de test dans l'app** : appui long sur le prénom → Outils de test → saisir l'ID interne → Simuler : approuvé. L'ID interne est visible dans les logs backend (`Dépôt créé : transaction interne id=X`) ou en base (`SELECT id FROM transactions ORDER BY id DESC LIMIT 1;`).
+2. **Simuler directement depuis Swagger** : `POST /dev/simuler-webhook` avec `{ transactionId, resultat: "approuve" }`.
+
+### Variables d'environnement backend liées à FedaPay
+| Variable | Description |
+|---|---|
+| `FEDAPAY_ENV` | `sandbox` (toujours en dev) |
+| `FEDAPAY_SECRET_KEY` | Clé secrète sandbox (`sk_sandbox_xxx`) |
+| `FEDAPAY_WEBHOOK_SECRET` | Secret de signature webhook (`wh_sandbox_xxx`) |
+| `APP_PUBLIC_URL` | URL publique cloudflared (`https://xxxx.trycloudflare.com`) |

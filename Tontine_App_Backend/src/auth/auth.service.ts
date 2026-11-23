@@ -1,4 +1,4 @@
-import {
+﻿import {
   BadRequestException,
   HttpException,
   HttpStatus,
@@ -12,20 +12,23 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+import { randomUUID } from 'crypto';
 import { Membre } from '../membre/entities/membre.entity';
 import { Portefeuille } from '../portefeuille/entities/portefeuille.entity';
 import { JetonRafraichissementService } from '../jeton-rafraichissement/jeton-rafraichissement.service';
 import { ParametreSystemeService } from '../parametre-systeme/parametre-systeme.service';
 import { Role, StatutMembre } from '../common/enums';
-import { JwtPayload, JwtRetraitPayload } from './interfaces/jwt-payload.interface';
+import {
+  JwtPayload,
+  JwtRetraitPayload,
+} from './interfaces/jwt-payload.interface';
 import { InscriptionDto } from './dto/inscription.dto';
 import { ConnexionDto } from './dto/connexion.dto';
 import { ChangerPasswordDto } from './dto/changer-password.dto';
 import { DefinirCodeRetraitDto } from './dto/definir-code-retrait.dto';
 
 /** Hash bcrypt factice utilisé pour égaliser le temps de réponse quand le phone est inconnu. */
-const HASH_FACTICE =
-  '$2b$12$invalidhashfacticeXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
+const HASH_FACTICE = '$2b$12$invalidhashfacticeXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
 
 /** Préfixe téléphonique du Bénin. */
 const PREFIXE_BENIN = '229';
@@ -93,29 +96,31 @@ export class AuthService {
 
     const hashedPassword = await bcrypt.hash(dto.password, rounds);
 
-    const membre = await this.membreRepo.manager.transaction(async (manager) => {
-      const mRepo = manager.getRepository(Membre);
-      const pRepo = manager.getRepository(Portefeuille);
+    const membre = await this.membreRepo.manager.transaction(
+      async (manager) => {
+        const mRepo = manager.getRepository(Membre);
+        const pRepo = manager.getRepository(Portefeuille);
 
-      const nouveau = mRepo.create({
-        nom: dto.nom,
-        phone,
-        password: hashedPassword,
-        role: Role.MEMBRE,          // forcé côté serveur
-        statut: StatutMembre.ACTIF, // forcé côté serveur
-      });
-      const saved = await mRepo.save(nouveau);
+        const nouveau = mRepo.create({
+          nom: dto.nom,
+          phone,
+          password: hashedPassword,
+          role: Role.MEMBRE, // forcé côté serveur
+          statut: StatutMembre.ACTIF, // forcé côté serveur
+        });
+        const saved = await mRepo.save(nouveau);
 
-      const portefeuille = pRepo.create({
-        soldeCotisation: 0,
-        soldeEpargne: 0,
-        soldeBloque: 0,
-        membre: saved,
-      });
-      await pRepo.save(portefeuille);
+        const portefeuille = pRepo.create({
+          soldeCotisation: 0,
+          soldeEpargne: 0,
+          soldeBloque: 0,
+          membre: saved,
+        });
+        await pRepo.save(portefeuille);
 
-      return saved;
-    });
+        return saved;
+      },
+    );
 
     const tokens = await this.emettrePaire(membre);
     return { membre, ...tokens };
@@ -143,7 +148,10 @@ export class AuthService {
       .getOne();
 
     // ---- Protection anti-bruteforce ----
-    if (membre?.connexionBloqueeJusqua && membre.connexionBloqueeJusqua > new Date()) {
+    if (
+      membre?.connexionBloqueeJusqua &&
+      membre.connexionBloqueeJusqua > new Date()
+    ) {
       const restantMs = membre.connexionBloqueeJusqua.getTime() - Date.now();
       const restantMin = Math.ceil(restantMs / 60000);
       throw new HttpException(
@@ -166,7 +174,9 @@ export class AuthService {
 
     // ---- Vérification du statut (APRÈS le check password pour ne pas révéler l'existence) ----
     if (membre.statut === StatutMembre.SUSPENDU) {
-      throw new UnauthorizedException('Compte suspendu. Contactez l\'administration.');
+      throw new UnauthorizedException(
+        "Compte suspendu. Contactez l'administration.",
+      );
     }
     if (membre.statut === StatutMembre.CLOTURE) {
       throw new UnauthorizedException('Compte clôturé.');
@@ -206,7 +216,9 @@ export class AuthService {
       if (jetonRevoqu?.membre) {
         await this.jetonService.revoquerTousPourMembre(jetonRevoqu.membre.id);
       }
-      throw new UnauthorizedException('Jeton de rafraîchissement invalide ou expiré.');
+      throw new UnauthorizedException(
+        'Jeton de rafraîchissement invalide ou expiré.',
+      );
     }
 
     // Vérification d'expiration (double-check)
@@ -238,7 +250,10 @@ export class AuthService {
   //  Changer le mot de passe
   // ─────────────────────────────────────────────
 
-  async changerPassword(membreId: number, dto: ChangerPasswordDto): Promise<void> {
+  async changerPassword(
+    membreId: number,
+    dto: ChangerPasswordDto,
+  ): Promise<void> {
     const membre = await this.membreRepo
       .createQueryBuilder('m')
       .addSelect('m.password')
@@ -249,11 +264,15 @@ export class AuthService {
     if (!membre) throw new NotFoundException('Membre introuvable.');
 
     const ancienOk = await bcrypt.compare(dto.ancienPassword, membre.password);
-    if (!ancienOk) throw new UnauthorizedException('Ancien mot de passe incorrect.');
+    if (!ancienOk)
+      throw new UnauthorizedException('Ancien mot de passe incorrect.');
 
     // Refuse un nouveau password identique au codeRetrait actuel
     if (membre.codeRetrait) {
-      const identique = await bcrypt.compare(dto.nouveauPassword, membre.codeRetrait);
+      const identique = await bcrypt.compare(
+        dto.nouveauPassword,
+        membre.codeRetrait,
+      );
       if (identique) {
         throw new BadRequestException(
           'Le nouveau mot de passe ne peut pas être identique au code de retrait.',
@@ -271,7 +290,10 @@ export class AuthService {
   //  Définir / changer le code de retrait
   // ─────────────────────────────────────────────
 
-  async definirCodeRetrait(membreId: number, dto: DefinirCodeRetraitDto): Promise<void> {
+  async definirCodeRetrait(
+    membreId: number,
+    dto: DefinirCodeRetraitDto,
+  ): Promise<void> {
     const membre = await this.membreRepo
       .createQueryBuilder('m')
       .addSelect('m.password')
@@ -284,13 +306,17 @@ export class AuthService {
     if (!passwordOk) throw new UnauthorizedException('Mot de passe incorrect.');
 
     if (dto.codeRetrait === dto.password) {
-      throw new BadRequestException('Le code de retrait doit être différent du mot de passe.');
+      throw new BadRequestException(
+        'Le code de retrait doit être différent du mot de passe.',
+      );
     }
 
     // Vérification supplémentaire : compare le code brut avec le hash du password
     const identique = await bcrypt.compare(dto.codeRetrait, membre.password);
     if (identique) {
-      throw new BadRequestException('Le code de retrait doit être différent du mot de passe.');
+      throw new BadRequestException(
+        'Le code de retrait doit être différent du mot de passe.',
+      );
     }
 
     const rounds = this.config.get<number>('bcrypt.rounds') ?? 12;
@@ -306,7 +332,10 @@ export class AuthService {
    * Vérifie le code de retrait avec blocage anti-bruteforce.
    * Si correct, retourne un jeton JWT à courte durée de vie (purpose = 'retrait').
    */
-  async verifierCodeRetrait(membreId: number, codeBrut: string): Promise<string> {
+  async verifierCodeRetrait(
+    membreId: number,
+    codeBrut: string,
+  ): Promise<string> {
     const membre = await this.membreRepo
       .createQueryBuilder('m')
       .addSelect('m.codeRetrait')
@@ -320,7 +349,7 @@ export class AuthService {
     if (!membre.codeRetrait) {
       throw new BadRequestException(
         "Vous n'avez pas encore défini de code de retrait. " +
-        'Rendez-vous sur /auth/code-retrait pour en créer un.',
+          'Rendez-vous sur /auth/code-retrait pour en créer un.',
       );
     }
 
@@ -345,7 +374,10 @@ export class AuthService {
    * Méthode interne réutilisable par les futures routes de retrait.
    * Lève une exception si le code est invalide ou si le membre est bloqué.
    */
-  async verifierCodeRetraitInterne(membreId: number, codeBrut: string): Promise<void> {
+  async verifierCodeRetraitInterne(
+    membreId: number,
+    codeBrut: string,
+  ): Promise<void> {
     await this.verifierCodeRetrait(membreId, codeBrut);
   }
 
@@ -357,13 +389,15 @@ export class AuthService {
   private async emettrePaire(membre: Membre): Promise<TokenPair> {
     const payload: JwtPayload = { sub: membre.id, role: membre.role };
 
-    const accessExpires = this.config.get<string>('jwt.accessExpiresIn') ?? '15m';
+    const accessExpires =
+      this.config.get<string>('jwt.accessExpiresIn') ?? '15m';
     const accessToken = this.jwtService.sign(payload, {
       expiresIn: accessExpires as never,
       audience: 'tontine-access',
     });
 
-    const refreshDays = this.config.get<number>('jwt.refreshExpiresInDays') ?? 30;
+    const refreshDays =
+      this.config.get<number>('jwt.refreshExpiresInDays') ?? 30;
     const refreshToken = crypto.randomBytes(48).toString('hex');
     const expireLe = new Date(Date.now() + refreshDays * 24 * 60 * 60 * 1000);
 
@@ -384,16 +418,16 @@ export class AuthService {
 
   /** Incrémente le compteur de tentatives de connexion et bloque si dépassement. */
   private async incrementerTentativesConnexion(membre: Membre): Promise<void> {
-    const max = await this.parametres.getNumber('max_tentatives_connexion').catch(() => 5);
+    const max = await this.parametres
+      .getNumber('max_tentatives_connexion')
+      .catch(() => 5);
     const dureeMins = await this.parametres
       .getNumber('duree_blocage_connexion_minutes')
       .catch(() => 15);
 
     const nouvelles = (membre.tentativesConnexionEchouees ?? 0) + 1;
     const bloqueeJusqua =
-      nouvelles >= max
-        ? new Date(Date.now() + dureeMins * 60 * 1000)
-        : null;
+      nouvelles >= max ? new Date(Date.now() + dureeMins * 60 * 1000) : null;
 
     await this.membreRepo.update(membre.id, {
       tentativesConnexionEchouees: nouvelles,
@@ -403,7 +437,10 @@ export class AuthService {
 
   /** Vérifie si le membre est bloqué pour le code de retrait. */
   private async verifierBlocageCodeRetrait(membre: Membre): Promise<void> {
-    if (membre.codeRetraitBloqueJusqua && membre.codeRetraitBloqueJusqua > new Date()) {
+    if (
+      membre.codeRetraitBloqueJusqua &&
+      membre.codeRetraitBloqueJusqua > new Date()
+    ) {
       const restantMs = membre.codeRetraitBloqueJusqua.getTime() - Date.now();
       const restantMin = Math.ceil(restantMs / 60000);
       throw new HttpException(
@@ -414,17 +451,19 @@ export class AuthService {
   }
 
   /** Incrémente le compteur de tentatives de code de retrait et bloque si dépassement. */
-  private async incrementerTentativesCodeRetrait(membre: Membre): Promise<void> {
-    const max = await this.parametres.getNumber('max_tentatives_code_retrait').catch(() => 3);
+  private async incrementerTentativesCodeRetrait(
+    membre: Membre,
+  ): Promise<void> {
+    const max = await this.parametres
+      .getNumber('max_tentatives_code_retrait')
+      .catch(() => 3);
     const dureeMins = await this.parametres
       .getNumber('duree_blocage_code_retrait_minutes')
       .catch(() => 30);
 
     const nouvelles = (membre.tentativesCodeRetraitEchouees ?? 0) + 1;
     const bloqueeJusqua =
-      nouvelles >= max
-        ? new Date(Date.now() + dureeMins * 60 * 1000)
-        : null;
+      nouvelles >= max ? new Date(Date.now() + dureeMins * 60 * 1000) : null;
 
     await this.membreRepo.update(membre.id, {
       tentativesCodeRetraitEchouees: nouvelles,

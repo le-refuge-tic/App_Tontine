@@ -1,4 +1,37 @@
 /**
+ * Paramètres de création d'un payout FedaPay (virement sortant vers Mobile Money).
+ */
+export interface CreerPayoutParams {
+  montant: number;
+  description: string;
+  /** Référence marchand unique (merchant_reference). */
+  referenceUnique: string;
+  client: {
+    /** Nom complet du membre (prénom + nom). */
+    nom: string;
+    /** Numéro de téléphone complet du membre. */
+    phone: string;
+  };
+}
+
+export interface ResultatCreerPayout {
+  /** Identifiant numérique FedaPay Payout converti en chaîne. */
+  idFedapayPayout: string;
+  /** Statut FedaPay au moment de la création (ex. 'pending'). */
+  statut: string;
+}
+
+export interface PayoutFedapay {
+  idFedapayPayout: string;
+  /** 'pending' | 'started' | 'processing' | 'sent' | 'failed' */
+  statut: string;
+  /** Frais réels FedaPay (FCFA). */
+  fees: number;
+  /** Montant réellement transféré (FCFA). */
+  amountTransferred: number;
+}
+
+/**
  * Paramètres de création d'une transaction FedaPay.
  */
 export interface CreerTransactionParams {
@@ -45,6 +78,14 @@ export interface IFedapayClient {
   ): Promise<ResultatCreerTransaction>;
   genererLienPaiement(idFedapay: string): Promise<ResultatGenererLien>;
   lireTransaction(idFedapay: string): Promise<TransactionFedapay>;
+  /**
+   * Crée un payout FedaPay et l'envoie immédiatement (`sendNow()`).
+   */
+  creerEtEnvoyerPayout(params: CreerPayoutParams): Promise<ResultatCreerPayout>;
+  /**
+   * Relit le statut d'un payout FedaPay.
+   */
+  lirePayout(idFedapayPayout: string): Promise<PayoutFedapay>;
   /**
    * Vérifie la signature HMAC du webhook et retourne l'événement parsé.
    * Lève une erreur si la signature est invalide.

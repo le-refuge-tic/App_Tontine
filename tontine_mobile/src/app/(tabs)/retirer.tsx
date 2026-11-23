@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Ecran } from "@/components/Ecran";
 import { Carte } from "@/components/Carte";
@@ -11,19 +11,21 @@ import { Icone } from "@/components/Icone";
 import { CarteSquelette } from "@/components/Squelette";
 import { useToast } from "@/components/Toast";
 import { theme } from "@/theme";
-import { MOYEN_PAIEMENT, MENTION_FRAIS_FEDAPAY } from "@/constants/app";
-import { useTableauDeBord, useVerifierCodeRetrait, useDemanderRetrait } from "@/hooks/useRequetes";
-import { ErreurApi } from "@/api";
+import { MOYEN_PAIEMENT, MENTION_FRAIS_FEDAPAY, POLLING_TRANSACTION_INTERVAL_MS, POLLING_TRANSACTION_DUREE_MAX_MS } from "@/constants/app";
+import { useTableauDeBord, useVerifierCodeRetrait, useDemanderRetrait, useInvaliderDonnees } from "@/hooks/useRequetes";
+import { transactions, ErreurApi } from "@/api";
 import { formaterFCFA } from "@/utils/formaterFCFA";
 import { hapticSucces, hapticErreur } from "@/utils/haptics";
 import type { Transaction } from "@/api/types";
 
 type ModeRetrait = "partiel" | "tout";
+type EtatRetrait = "formulaire" | "attente" | "succes" | "echec" | "timeout";
 
 export default function Retirer() {
   const tdb = useTableauDeBord();
   const verifierCode = useVerifierCodeRetrait();
   const demanderRetrait = useDemanderRetrait();
+  const invalider = useInvaliderDonnees();
   const { afficher } = useToast();
 
   const [mode, setMode] = useState<ModeRetrait>("partiel");
@@ -32,8 +34,11 @@ export default function Retirer() {
   const [erreurCode, setErreurCode] = useState<string | null>(null);
   const [reinitCode, setReinitCode] = useState(0);
   const [transaction, setTransaction] = useState<Transaction | null>(null);
+  const [etat, setEtat] = useState<EtatRetrait>("formulaire");
+  // Anti-double-envoi : empêche deux POST /retraits simultanés.
+  const enCoursRef = useRef(false);
 
-  const retirable = tdb.data?.retirable ?? tdb.data?.soldeCotisation ?? 0;
+  const retirable = tdb.data?.retirable ?? 0;
 
   const appliquerPourcentage = (p: number) => {
     setMontantSaisi(String(Math.floor(retirable * p)));
@@ -48,39 +53,172 @@ export default function Retirer() {
     setFeuilleVisible(true);
   };
 
+  // Polling du statut de la transaction de retrait.
+  const pollStatut = useCallback(
+    async (transactionId: number): Promise<void> => {
+      return new Promise((resolve) => {
+        const debut = Date.now();
+        const intervalle = setInterval(async () => {
+          try {
+            const t = await transactions.obtenirTransaction(transactionId);
+            setTransaction(t);
+            if (t.statut === "reussi") {
+              clearInterval(intervalle);
+              invalider();
+              setEtat("succes");
+              hapticSucces();
+              resolve();
+            } else if (t.statut === "echoue") {
+              clearInterval(intervalle);
+              setEtat("echec");
+              hapticErreur();
+              resolve();
+            } else if (Date.now() - debut > POLLING_TRANSACTION_DUREE_MAX_MS) {
+              clearInterval(intervalle);
+              setEtat("timeout");
+              resolve();
+            }
+          } catch {
+            // Erreurs réseau transitoires ignorées.
+          }
+        }, POLLING_TRANSACTION_INTERVAL_MS);
+      });
+    },
+    [invalider],
+  );
+
   const surCode = async (code: string) => {
+    if (enCoursRef.current) return;
+    enCoursRef.current = true;
     setErreurCode(null);
     try {
       const jeton = await verifierCode.mutateAsync(code);
       setFeuilleVisible(false);
-      const params = mode === "tout"
-        ? { total: true as const, jetonRetrait: jeton }
-        : { montant: Number(montantSaisi), jetonRetrait: jeton };
+      setEtat("attente");
+
+      const params =
+        mode === "tout"
+          ? { total: true as const, jetonRetrait: jeton }
+          : { montant: Number(montantSaisi.replace(/\D/g, "")), jetonRetrait: jeton };
+
       const res = await demanderRetrait.mutateAsync(params);
       setTransaction(res.transaction);
-      hapticSucces();
+
+      // Démo : la transaction est directement réussie.
+      if (res.transaction.statut === "reussi") {
+        invalider();
+        setEtat("succes");
+        hapticSucces();
+        return;
+      }
+
+      // Mode réel : on poll jusqu'à confirmation.
+      await pollStatut(res.transaction.id);
     } catch (e) {
-      const msg = e instanceof ErreurApi ? e.message : "Code incorrect.";
-      setErreurCode(msg);
-      setReinitCode((n) => n + 1);
-      hapticErreur();
+      const statut = e instanceof ErreurApi ? e.statut : undefined;
+      const msg = e instanceof ErreurApi ? e.message : "Code incorrect ou retrait impossible.";
+
+      // Si le jeton a été consommé côté serveur (401 après envoi) ou si l'opération
+      // est en conflit (409), on ferme la feuille et on affiche l'erreur globalement.
+      if (statut === 401 || statut === 409 || statut === 422 || statut === 503) {
+        setFeuilleVisible(false);
+        setEtat("echec");
+        afficher(msg, "erreur");
+        hapticErreur();
+      } else {
+        // Erreur locale (code incorrect, timeout réseau) : rester sur la feuille.
+        setErreurCode(msg);
+        setReinitCode((n) => n + 1);
+        hapticErreur();
+      }
+    } finally {
+      enCoursRef.current = false;
     }
   };
 
-  if (tdb.isPending) return <Ecran><View style={styles.contenu}><CarteSquelette /></View></Ecran>;
-  if (tdb.isError) return <Ecran><View style={styles.contenu}><EtatErreur message="Impossible de charger votre solde." onReessayer={() => tdb.refetch()} /></View></Ecran>;
+  const reinitialiser = () => {
+    setEtat("formulaire");
+    setTransaction(null);
+    setMontantSaisi("");
+    setErreurCode(null);
+  };
 
-  if (transaction) {
+  if (tdb.isPending) {
+    return <Ecran><View style={styles.contenu}><CarteSquelette /></View></Ecran>;
+  }
+  if (tdb.isError) {
+    return (
+      <Ecran>
+        <View style={styles.contenu}>
+          <EtatErreur message="Impossible de charger votre solde." onReessayer={() => tdb.refetch()} />
+        </View>
+      </Ecran>
+    );
+  }
+
+  if (etat === "attente") {
     return (
       <Ecran defilement={false}>
         <View style={[styles.contenu, styles.centré]}>
-          <View style={styles.rondeSucces}><Icone nom="checkmark" taille={40} couleur="#FFFFFF" /></View>
-          <Text style={[theme.typographie.titre2, { color: theme.couleurs.textePrimaire, textAlign: "center" }]}>Retrait initié</Text>
-          <Text style={[theme.typographie.montantGrand, { color: theme.couleurs.primaire }]}>{formaterFCFA(transaction.montant)}</Text>
+          <Icone nom="time-outline" taille={56} couleur={theme.couleurs.primaire} />
+          <Text style={[theme.typographie.titre2, { color: theme.couleurs.textePrimaire, textAlign: "center" }]}>
+            Retrait en cours…
+          </Text>
+          <Text style={[theme.typographie.corps2, { color: theme.couleurs.texteSecondaire, textAlign: "center" }]}>
+            Envoi vers {MOYEN_PAIEMENT}. Patientez.
+          </Text>
+        </View>
+      </Ecran>
+    );
+  }
+
+  if (etat === "succes" && transaction) {
+    return (
+      <Ecran defilement={false}>
+        <View style={[styles.contenu, styles.centré]}>
+          <View style={styles.rondeSucces}>
+            <Icone nom="checkmark" taille={40} couleur="#FFFFFF" />
+          </View>
+          <Text style={[theme.typographie.titre2, { color: theme.couleurs.textePrimaire, textAlign: "center" }]}>
+            Retrait initié
+          </Text>
+          <Text style={[theme.typographie.montantGrand, { color: theme.couleurs.primaire }]}>
+            {formaterFCFA(transaction.montant)}
+          </Text>
           <Text style={[theme.typographie.corps2, { color: theme.couleurs.texteSecondaire, textAlign: "center" }]}>
             Les fonds seront envoyés sur {MOYEN_PAIEMENT}.
           </Text>
-          <Bouton libelle="Fermer" onPress={() => setTransaction(null)} style={{ marginTop: 8 }} />
+          <Bouton libelle="Fermer" onPress={reinitialiser} style={{ marginTop: 8 }} />
+        </View>
+      </Ecran>
+    );
+  }
+
+  if (etat === "timeout") {
+    return (
+      <Ecran defilement={false}>
+        <View style={[styles.contenu, styles.centré]}>
+          <Icone nom="hourglass-outline" taille={56} couleur={theme.couleurs.or} />
+          <Text style={[theme.typographie.titre2, { color: theme.couleurs.textePrimaire, textAlign: "center" }]}>
+            Retrait en attente de confirmation
+          </Text>
+          <Text style={[theme.typographie.corps2, { color: theme.couleurs.texteSecondaire, textAlign: "center" }]}>
+            Votre retrait est en cours de traitement. Revenez vérifier votre solde dans quelques instants.
+          </Text>
+          <Bouton libelle="Retour" onPress={reinitialiser} />
+        </View>
+      </Ecran>
+    );
+  }
+
+  if (etat === "echec") {
+    return (
+      <Ecran defilement={false}>
+        <View style={[styles.contenu, styles.centré]}>
+          <EtatErreur
+            message={transaction ? `Le retrait de ${formaterFCFA(transaction.montant)} a échoué.` : "Le retrait a échoué."}
+            onReessayer={reinitialiser}
+          />
         </View>
       </Ecran>
     );
@@ -152,7 +290,7 @@ export default function Retirer() {
           <Bouton
             libelle={`Retirer vers ${MOYEN_PAIEMENT}`}
             onPress={lancerRetrait}
-            chargement={demanderRetrait.isPending}
+            chargement={demanderRetrait.isPending || verifierCode.isPending}
             iconeGauche="arrow-up-circle-outline"
           />
         </View>

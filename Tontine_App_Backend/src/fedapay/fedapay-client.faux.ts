@@ -1,6 +1,9 @@
 import type {
+  CreerPayoutParams,
   CreerTransactionParams,
   IFedapayClient,
+  PayoutFedapay,
+  ResultatCreerPayout,
   ResultatCreerTransaction,
   ResultatGenererLien,
   TransactionFedapay,
@@ -16,6 +19,10 @@ export class FedapayClientFaux implements IFedapayClient {
   private _sigValid: boolean = true;
   private _idFedapay: string = '12345';
 
+  private _statutPayout: string = 'pending';
+  private _feesPayout: number = 0;
+  private _idFedapayPayout: string = 'PO12345';
+
   definirStatut(s: string): void {
     this._statut = s;
   }
@@ -30,6 +37,18 @@ export class FedapayClientFaux implements IFedapayClient {
 
   definirIdFedapay(id: string): void {
     this._idFedapay = id;
+  }
+
+  definirStatutPayout(s: string): void {
+    this._statutPayout = s;
+  }
+
+  definirFeesPayout(f: number): void {
+    this._feesPayout = f;
+  }
+
+  definirIdFedapayPayout(id: string): void {
+    this._idFedapayPayout = id;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -51,6 +70,24 @@ export class FedapayClientFaux implements IFedapayClient {
   // eslint-disable-next-line @typescript-eslint/require-await
   async lireTransaction(id: string): Promise<TransactionFedapay> {
     return { idFedapay: id, statut: this._statut, fees: this._fees };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async creerEtEnvoyerPayout(
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _params: CreerPayoutParams,
+  ): Promise<ResultatCreerPayout> {
+    return { idFedapayPayout: this._idFedapayPayout, statut: 'pending' };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async lirePayout(id: string): Promise<PayoutFedapay> {
+    return {
+      idFedapayPayout: id,
+      statut: this._statutPayout,
+      fees: this._feesPayout,
+      amountTransferred: 0,
+    };
   }
 
   verifierSignatureWebhook(

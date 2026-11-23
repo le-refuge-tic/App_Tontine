@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { RefreshControl, StyleSheet, Text, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
+import * as WebBrowser from "expo-web-browser";
 import { Ecran } from "@/components/Ecran";
 import { Carte } from "@/components/Carte";
 import { CarnetDuMois } from "@/components/CarnetDuMois";
@@ -10,32 +11,41 @@ import { EtatErreur } from "@/components/EtatErreur";
 import { Squelette } from "@/components/Squelette";
 import { useToast } from "@/components/Toast";
 import { theme } from "@/theme";
-import { MOYEN_PAIEMENT, MENTION_FRAIS_FEDAPAY, POLLING_TRANSACTION_INTERVAL_MS, POLLING_TRANSACTION_DUREE_MAX_MS } from "@/constants/app";
-import { useCycleEnCours, useLancerDepot } from "@/hooks/useRequetes";
+import {
+  MOYEN_PAIEMENT,
+  MENTION_FRAIS_FEDAPAY,
+  POLLING_TRANSACTION_INTERVAL_MS,
+  POLLING_TRANSACTION_DUREE_MAX_MS,
+} from "@/constants/app";
+import { useCycleEnCours, useLancerDepot, useInvaliderDonnees } from "@/hooks/useRequetes";
 import { transactions, ErreurApi } from "@/api";
 import { formaterFCFA } from "@/utils/formaterFCFA";
 import { dateJourBeninISO } from "@/utils/dates";
 import { hapticSucces, hapticErreur } from "@/utils/haptics";
 import type { Transaction } from "@/api/types";
 
-type EtatPaiement = "selection" | "attente" | "succes" | "echec";
+type EtatPaiement = "selection" | "attente_paiement" | "attente_confirmation" | "succes" | "echec" | "timeout";
 
 export default function Cotiser() {
   const cycle = useCycleEnCours();
   const lancerDepot = useLancerDepot();
+  const invalider = useInvaliderDonnees();
   const { afficher } = useToast();
 
   const [joursSelectionnes, setJoursSelectionnes] = useState<number[]>([]);
   const [etatPaiement, setEtatPaiement] = useState<EtatPaiement>("selection");
   const [transactionEnCours, setTransactionEnCours] = useState<Transaction | null>(null);
+  const [messageEchec, setMessageEchec] = useState<string>("");
   const [rafraichit, setRafraichit] = useState(false);
+  // Anti-double-clic : empêche deux POST /depots simultanés.
+  const enCoursRef = useRef(false);
 
   const aujourdhui = dateJourBeninISO();
   const jours = cycle.data?.jours ?? [];
   const jourDuJour = jours.find((j) => j.datePrevue === aujourdhui);
   const montantJour = jourDuJour?.montantDu ?? cycle.data?.miseBase ?? 0;
 
-  // Calcul indicatif du total des jours sélectionnés (affichage seulement, pas d'envoi).
+  // Total indicatif des jours sélectionnés (affichage uniquement).
   const totalSelectionne = jours
     .filter((j) => joursSelectionnes.includes(j.id))
     .reduce((s, j) => s + j.montantDu, 0);
@@ -45,52 +55,83 @@ export default function Cotiser() {
       prev.includes(id) ? prev.filter((j) => j !== id) : [...prev, id],
     );
 
-  // Polling de la transaction.
+  // Polling du statut de la transaction.
   const pollStatut = useCallback(
-    async (transactionId: number) => {
-      const debut = Date.now();
-      const intervalle = setInterval(async () => {
-        try {
-          const t = await transactions.obtenirTransaction(transactionId);
-          setTransactionEnCours(t);
-          if (t.statut === "reussi") {
-            clearInterval(intervalle);
-            setEtatPaiement("succes");
-            hapticSucces();
-          } else if (t.statut === "echoue") {
-            clearInterval(intervalle);
-            setEtatPaiement("echec");
-            hapticErreur();
-          } else if (Date.now() - debut > POLLING_TRANSACTION_DUREE_MAX_MS) {
-            clearInterval(intervalle);
-            setEtatPaiement("echec");
+    async (transactionId: number): Promise<void> => {
+      return new Promise((resolve) => {
+        const debut = Date.now();
+        const intervalle = setInterval(async () => {
+          try {
+            const t = await transactions.obtenirTransaction(transactionId);
+            setTransactionEnCours(t);
+            if (t.statut === "reussi") {
+              clearInterval(intervalle);
+              invalider();
+              setEtatPaiement("succes");
+              hapticSucces();
+              resolve();
+            } else if (t.statut === "echoue") {
+              clearInterval(intervalle);
+              setEtatPaiement("echec");
+              hapticErreur();
+              resolve();
+            } else if (Date.now() - debut > POLLING_TRANSACTION_DUREE_MAX_MS) {
+              clearInterval(intervalle);
+              setEtatPaiement("timeout");
+              resolve();
+            }
+          } catch {
+            // Erreurs réseau transitoires ignorées pendant le polling.
           }
-        } catch {
-          // On ignore les erreurs réseau transitoires pendant le polling.
-        }
-      }, POLLING_TRANSACTION_INTERVAL_MS);
-      return () => clearInterval(intervalle);
+        }, POLLING_TRANSACTION_INTERVAL_MS);
+      });
     },
-    [],
+    [invalider],
   );
 
   const payer = async () => {
-    setEtatPaiement("attente");
+    if (enCoursRef.current) return;
+    enCoursRef.current = true;
     try {
-      const idsAPayer = joursSelectionnes.length > 0 ? joursSelectionnes : (jourDuJour ? [jourDuJour.id] : []);
+      // Sans sélection manuelle : envoyer un tableau vide — le backend
+      // choisit lui-même le jour a_payer d'aujourd'hui.
+      const idsAPayer = joursSelectionnes.length > 0 ? joursSelectionnes : [];
+
       const res = await lancerDepot.mutateAsync(idsAPayer);
       setTransactionEnCours(res.transaction);
+
+      // Si la transaction est déjà réussie (démo ou double-clic).
       if (res.transaction.statut === "reussi") {
         setEtatPaiement("succes");
         hapticSucces();
-      } else {
-        await pollStatut(res.transaction.id);
+        return;
       }
+
+      // Ouvrir le navigateur pour le paiement FedaPay.
+      if (res.urlPaiement) {
+        setEtatPaiement("attente_paiement");
+        await WebBrowser.openBrowserAsync(res.urlPaiement);
+      }
+
+      // Une fois le navigateur fermé (ou si pas d'URL), passer en polling.
+      setEtatPaiement("attente_confirmation");
+      await pollStatut(res.transaction.id);
     } catch (e) {
-      const msg = e instanceof ErreurApi ? e.message : "Paiement impossible pour l'instant.";
+      const msg = e instanceof ErreurApi ? e.message : (e instanceof Error ? e.message : String(e));
+      console.error("[COTISER] Erreur payer():", msg, e);
+      setMessageEchec(msg);
       setEtatPaiement("echec");
       afficher(msg, "erreur");
+      hapticErreur();
+    } finally {
+      enCoursRef.current = false;
     }
+  };
+
+  const verifierANouveau = async () => {
+    if (!transactionEnCours) return;
+    setEtatPaiement("attente_confirmation");
+    await pollStatut(transactionEnCours.id);
   };
 
   const rafraichir = async () => {
@@ -101,16 +142,60 @@ export default function Cotiser() {
     setEtatPaiement("selection");
   };
 
-  if (etatPaiement === "attente") return <EcranAttente />;
-  if (etatPaiement === "succes" && transactionEnCours) {
-    return <EcranSucces transaction={transactionEnCours} onTerminer={() => { setEtatPaiement("selection"); setJoursSelectionnes([]); }} />;
+  if (etatPaiement === "attente_paiement" || etatPaiement === "attente_confirmation") {
+    return (
+      <EcranAttente
+        enAttentePaiement={etatPaiement === "attente_paiement"}
+        transaction={transactionEnCours}
+      />
+    );
   }
+
+  if (etatPaiement === "timeout") {
+    return (
+      <Ecran defilement={false}>
+        <View style={styles.centré}>
+          <Icone nom="hourglass-outline" taille={56} couleur={theme.couleurs.or} />
+          <Text style={[theme.typographie.titre2, { color: theme.couleurs.textePrimaire, textAlign: "center" }]}>
+            Paiement en attente de confirmation
+          </Text>
+          <Text style={[theme.typographie.corps2, { color: theme.couleurs.texteSecondaire, textAlign: "center" }]}>
+            Votre opérateur n'a pas encore confirmé le paiement. Réessayez dans quelques instants.
+          </Text>
+          <Bouton
+            libelle="Vérifier à nouveau"
+            onPress={verifierANouveau}
+            iconeGauche="refresh-outline"
+            style={{ marginTop: 8 }}
+          />
+          <Bouton
+            libelle="Retour"
+            variante="secondaire"
+            onPress={() => { setEtatPaiement("selection"); setJoursSelectionnes([]); }}
+          />
+        </View>
+      </Ecran>
+    );
+  }
+
+  if (etatPaiement === "succes" && transactionEnCours) {
+    return (
+      <EcranSucces
+        transaction={transactionEnCours}
+        onTerminer={() => { setEtatPaiement("selection"); setJoursSelectionnes([]); }}
+      />
+    );
+  }
+
   if (etatPaiement === "echec") {
     return (
       <Ecran>
         <View style={styles.contenu}>
           <Carte style={styles.echecCarte}>
-            <EtatErreur message="Le paiement a échoué ou n'a pas été validé à temps." onReessayer={() => setEtatPaiement("selection")} />
+            <EtatErreur
+              message={messageEchec || "Le paiement a échoué ou n'a pas été validé."}
+              onReessayer={() => setEtatPaiement("selection")}
+            />
           </Carte>
         </View>
       </Ecran>
@@ -153,7 +238,7 @@ export default function Cotiser() {
           </Animated.View>
         ) : null}
 
-        {/* Récapitulatif */}
+        {/* Récapitulatif des jours sélectionnés */}
         {joursSelectionnes.length > 0 ? (
           <Carte style={styles.recap}>
             <View style={styles.recapLigne}>
@@ -191,16 +276,29 @@ export default function Cotiser() {
   );
 }
 
-function EcranAttente() {
+function EcranAttente({
+  enAttentePaiement,
+  transaction,
+}: {
+  enAttentePaiement: boolean;
+  transaction: Transaction | null;
+}) {
   return (
     <Ecran defilement={false}>
       <View style={styles.centré}>
         <Icone nom="time-outline" taille={56} couleur={theme.couleurs.primaire} />
         <Text style={[theme.typographie.titre2, { color: theme.couleurs.textePrimaire, textAlign: "center" }]}>
-          Validez le paiement sur votre téléphone
+          {enAttentePaiement ? "Validez le paiement sur votre téléphone" : "Vérification en cours…"}
         </Text>
+        {transaction ? (
+          <Text style={[theme.typographie.montantGrand, { color: theme.couleurs.primaire }]}>
+            {formaterFCFA(transaction.montant)}
+          </Text>
+        ) : null}
         <Text style={[theme.typographie.corps2, { color: theme.couleurs.texteSecondaire, textAlign: "center" }]}>
-          Nous attendons la confirmation de votre opérateur…
+          {enAttentePaiement
+            ? "Revenez dans l'app après avoir confirmé le paiement."
+            : "Nous attendons la confirmation de votre opérateur…"}
         </Text>
       </View>
     </Ecran>

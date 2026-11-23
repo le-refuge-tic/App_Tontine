@@ -3,11 +3,16 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { EcritureComptable } from '../ecriture-comptable/entities/ecriture-comptable.entity';
 import { TypeEcriture, SensEcriture } from '../common/enums';
+import { moisPortoNovo } from '../common/utils/dates.util';
 
 export interface TotauxRapport {
   cotise: number;
   retire: number;
   fondsRetenu: number;
+  /** Total épargné (dépôts d'épargne) sur le mois. */
+  epargneDepose: number;
+  /** Total retiré d'épargne (retraits + pénalités + retenues) sur le mois. */
+  epargneRetire: number;
 }
 
 export interface RapportMensuel {
@@ -25,6 +30,14 @@ export class RapportService {
 
   /**
    * Renvoie le rapport mensuel d'un membre.
+   *
+   * Regroupement par mois :
+   * - Écriture avec cycle  → classée dans le mois de `cycle.date_debut`.
+   * - Écriture sans cycle  → classée dans le mois de `e.date` converti en
+   *   Africa/Porto-Novo (UTC+1 fixe). La colonne `date` est `timestamptz` :
+   *   l'expression SQL `e.date AT TIME ZONE 'Africa/Porto-Novo'` suffit pour
+   *   obtenir l'heure locale (pas besoin du double-cast UTC nécessaire avec
+   *   `timestamp` sans fuseau).
    *
    * @param membreId  Identifiant du membre.
    * @param mois      Mois au format `AAAA-MM`.
@@ -47,15 +60,25 @@ export class RapportService {
       .leftJoinAndSelect('e.transaction', 'transaction')
       .where('e.membre_id = :membreId', { membreId })
       .andWhere(
-        // Inclure : (cycle dont le mois de début = mois demandé) OU (sans cycle)
-        '(cycle.id IS NULL OR cycle.date_debut LIKE :moisLike)',
-        { moisLike: `${mois}-%` },
+        // Écriture avec cycle → mois du début de cycle.
+        //   date_debut est de type DATE : il faut caster en TEXT avant LIKE.
+        // Écriture sans cycle → mois de e.date converti en Africa/Porto-Novo.
+        //   La colonne `date` est TIMESTAMPTZ : AT TIME ZONE renvoie un TIMESTAMP
+        //   local (sans fuseau). TO_CHAR extrait ensuite AAAA-MM.
+        `(
+          (cycle.id IS NOT NULL AND CAST(cycle.date_debut AS text) LIKE :moisLike)
+          OR
+          (cycle.id IS NULL AND TO_CHAR(e.date AT TIME ZONE 'Africa/Porto-Novo', 'YYYY-MM') = :mois)
+        )`,
+        { moisLike: `${mois}-%`, mois },
       )
       .orderBy('e.date', 'DESC');
 
     if (type === 'cotisations') {
       qb.andWhere('e.type = :typeCot', { typeCot: TypeEcriture.COTISATION });
     } else if (type === 'retraits') {
+      // liberation_fonds est exclu du filtre "retraits" : ce n'est pas un vrai
+      // retrait versé au membre.
       qb.andWhere('e.type = :typeRet', { typeRet: TypeEcriture.RETRAIT });
     }
 
@@ -69,6 +92,10 @@ export class RapportService {
             e.sens === SensEcriture.CREDIT,
         )
         .reduce((s, e) => s + e.montant, 0),
+      // liberation_fonds exclu du total retiré : seul le montant réellement
+      // versé au membre (écriture RETRAIT) compte. Les retraits d'épargne
+      // (`retrait_epargne`, `penalite`, `retenue_epargne`) sont exclus du
+      // total retiré de cotisation : ils sont comptés dans `epargneRetire`.
       retire: ecritures
         .filter(
           (e) =>
@@ -82,8 +109,34 @@ export class RapportService {
             e.sens === SensEcriture.DEBIT,
         )
         .reduce((s, e) => s + e.montant, 0),
+      epargneDepose: ecritures
+        .filter(
+          (e) =>
+            e.type === TypeEcriture.EPARGNE && e.sens === SensEcriture.CREDIT,
+        )
+        .reduce((s, e) => s + e.montant, 0),
+      epargneRetire: ecritures
+        .filter(
+          (e) =>
+            (e.type === TypeEcriture.RETRAIT_EPARGNE ||
+              e.type === TypeEcriture.PENALITE ||
+              e.type === TypeEcriture.RETENUE_EPARGNE) &&
+            e.sens === SensEcriture.DEBIT,
+        )
+        .reduce((s, e) => s + e.montant, 0),
     };
 
     return { mois, ecritures, totaux };
+  }
+
+  /**
+   * Alias exposé pour faciliter les tests unitaires : calcule le mois
+   * Africa/Porto-Novo d'un instant donné, au format `AAAA-MM`.
+   *
+   * C'est la contrepartie TypeScript de l'expression SQL
+   * `TO_CHAR(e.date AT TIME ZONE 'Africa/Porto-Novo', 'YYYY-MM')`.
+   */
+  moisPortoNovo(date: Date): string {
+    return moisPortoNovo(date);
   }
 }

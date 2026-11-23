@@ -1,45 +1,79 @@
 import {
-  Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Post,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { EpargneService } from './epargne.service';
+import { RetraitEpargneService } from '../retrait-epargne/retrait-epargne.service';
 import { CreateEpargneDto } from './dto/create-epargne.dto';
-import { UpdateEpargneDto } from './dto/update-epargne.dto';
-import { Roles } from '../common/decorators/roles.decorator';
+import { AjouterDepotEpargneDto } from './dto/ajouter-depot-epargne.dto';
+import { CreateRetraitEpargneDto } from '../retrait-epargne/dto/create-retrait-epargne.dto';
 import { UtilisateurCourant } from '../common/decorators/utilisateur-courant.decorator';
-import { Role } from '../common/enums/role.enum';
 import { Membre } from '../membre/entities/membre.entity';
 
 @ApiTags('epargnes')
 @ApiBearerAuth()
 @Controller('epargnes')
 export class EpargneController {
-  constructor(private readonly service: EpargneService) {}
+  constructor(
+    private readonly epargneService: EpargneService,
+    private readonly retraitEpargneService: RetraitEpargneService,
+  ) {}
 
+  @ApiOperation({ summary: 'Lister mes épargnes (avec aperçu de retrait).' })
   @Get()
   findAll(@UtilisateurCourant() courant: Membre) {
-    return this.service.findAll(courant.role === Role.ADMIN ? undefined : courant.id);
+    return this.epargneService.findAll(courant.id);
   }
 
-  @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number, @UtilisateurCourant() courant: Membre) {
-    return this.service.findOne(id, courant.role === Role.ADMIN ? undefined : courant.id);
-  }
-
+  @ApiOperation({
+    summary: 'Créer une épargne + initier le dépôt initial via FedaPay.',
+  })
   @Post()
-  create(@Body() dto: CreateEpargneDto, @UtilisateurCourant() courant: Membre) {
-    const membreId = courant.role !== Role.ADMIN ? courant.id : dto.membreId;
-    return this.service.create(dto, membreId);
+  @HttpCode(HttpStatus.OK)
+  creer(
+    @Body() dto: CreateEpargneDto,
+    @UtilisateurCourant() courant: Membre,
+  ) {
+    return this.epargneService.creer(courant.id, dto);
   }
 
-  @Patch(':id')
-  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateEpargneDto, @UtilisateurCourant() courant: Membre) {
-    return this.service.update(id, dto, courant.role === Role.ADMIN ? undefined : courant.id);
+  @ApiOperation({ summary: 'Détail d\'une épargne (avec aperçu de retrait).' })
+  @Get(':id')
+  findOne(
+    @Param('id', ParseIntPipe) id: number,
+    @UtilisateurCourant() courant: Membre,
+  ) {
+    return this.epargneService.findOne(id, courant.id);
   }
 
-  @Delete(':id')
-  @Roles(Role.ADMIN)
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.service.remove(id);
+  @ApiOperation({ summary: 'Ajouter de l\'argent à une épargne active.' })
+  @Post(':id/depots')
+  @HttpCode(HttpStatus.OK)
+  ajouterDepot(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: AjouterDepotEpargneDto,
+    @UtilisateurCourant() courant: Membre,
+  ) {
+    return this.epargneService.ajouterDepot(courant.id, id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Initier un retrait d\'épargne vers Mobile Money (jeton requis).',
+  })
+  @Post(':id/retraits')
+  @HttpCode(HttpStatus.CREATED)
+  creerRetrait(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CreateRetraitEpargneDto,
+    @UtilisateurCourant() courant: Membre,
+  ) {
+    return this.retraitEpargneService.creer(courant.id, id, dto);
   }
 }

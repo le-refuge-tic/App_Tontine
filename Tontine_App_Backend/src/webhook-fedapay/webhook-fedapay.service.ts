@@ -12,7 +12,7 @@ import { Transaction } from '../transaction/entities/transaction.entity';
 import { TransactionService } from '../transaction/transaction.service';
 import type { IFedapayClient } from '../fedapay/fedapay-client.interface';
 import { FEDAPAY_CLIENT } from '../fedapay/fedapay-client.interface';
-import { StatutTransaction } from '../common/enums';
+import { StatutTransaction, TypeTransaction } from '../common/enums';
 
 /** Structure de réponse systématique du webhook. */
 export interface ReponseWebhook {
@@ -24,6 +24,24 @@ interface ResultatTraitement {
   ignore: boolean;
   raison?: string;
 }
+
+/**
+ * Événements de transaction FedaPay (dépôts).
+ * TODO(verifier) : confirmer la liste exacte en sandbox.
+ */
+const EVENEMENTS_TRANSACTION = [
+  'transaction.approved',
+  'transaction.declined',
+  'transaction.canceled',
+] as const;
+
+/**
+ * Événements de payout FedaPay (retraits).
+ * TODO(verifier) : noms exacts des événements payout FedaPay — non documentés
+ * explicitement dans la doc webhook. Noms supposés : `payout.sent` et
+ * `payout.failed`. À confirmer en sandbox.
+ */
+const EVENEMENTS_PAYOUT = ['payout.sent', 'payout.failed'] as const;
 
 @Injectable()
 export class WebhookFedapayService {
@@ -62,6 +80,17 @@ export class WebhookFedapayService {
   async traiter(rawBody: Buffer, signature: string): Promise<ReponseWebhook> {
     // 1. Vérification de signature.
     let event: { name: string; object: Record<string, unknown> };
+
+    // Parser le corps brut pour accéder à `entity` (structure réelle FedaPay).
+    // Le SDK retourne event.object = "transaction" (le type en string) ;
+    // les vraies données sont dans rawPayload.entity.
+    let rawPayload: Record<string, unknown> = {};
+    try {
+      rawPayload = JSON.parse(rawBody.toString('utf8')) as Record<string, unknown>;
+    } catch {
+      // Corps non-JSON : on laisse rawPayload vide, l'extraction échouera proprement.
+    }
+
     try {
       event = this.fedapayClient.verifierSignatureWebhook(rawBody, signature);
     } catch {
@@ -72,10 +101,8 @@ export class WebhookFedapayService {
     const evenement = event.name;
     const payload = event.object;
 
-    // Extraire idFedapayRef depuis le payload.
-    // TODO(verifier) : structure exacte du payload webhook FedaPay.
-    //   Testé en sandbox : payload['id'] ou payload['transaction']['id'].
-    const idFedapayRef = this.extraireIdFedapay(payload);
+    // Extraire idFedapayRef depuis rawPayload.entity (structure réelle FedaPay sandbox).
+    const idFedapayRef = this.extraireIdFedapay(rawPayload);
 
     // 2. Idempotence : vérifier si déjà traité.
     if (idFedapayRef) {
@@ -103,6 +130,14 @@ export class WebhookFedapayService {
     });
     const savedWebhook = await this.webhookRepo.save(webhook);
 
+    // Log du payload complet pour déboguer la structure FedaPay sandbox.
+    this.logger.debug(
+      `Webhook payload complet : ${JSON.stringify(payload)}`,
+    );
+    this.logger.log(
+      `Webhook event.name="${evenement}" event.object type=${typeof payload} keys=${typeof payload === 'object' && payload !== null ? Object.keys(payload).join(',') : 'N/A'} raw=${JSON.stringify(payload).substring(0, 500)}`,
+    );
+
     // 4. Traitement métier.
     try {
       await this.traiterEvenement(
@@ -124,6 +159,7 @@ export class WebhookFedapayService {
   /**
    * Traitement direct (dev uniquement) sans vérification de signature.
    * By-passe la signature mais passe par le même `confirmer()`/`echouer()`.
+   * Fonctionne pour les dépôts et les retraits (confirmer() est polymorphe).
    */
   async traiterDirectement(
     transactionId: number,
@@ -161,12 +197,12 @@ export class WebhookFedapayService {
     payload: Record<string, unknown>,
     idFedapayRef: string | null,
   ): Promise<ResultatTraitement> {
-    const evenementsGeres = [
-      'transaction.approved',
-      'transaction.declined',
-      'transaction.canceled',
-    ];
-    if (!evenementsGeres.includes(evenement)) {
+    const tousEvenements = [
+      ...EVENEMENTS_TRANSACTION,
+      ...EVENEMENTS_PAYOUT,
+    ] as string[];
+
+    if (!tousEvenements.includes(evenement)) {
       await this.webhookRepo.update(webhook.id, { traite: true });
       return { ignore: true, raison: 'Événement non géré.' };
     }
@@ -192,6 +228,13 @@ export class WebhookFedapayService {
       return { ignore: true, raison: 'Transaction interne introuvable.' };
     }
 
+    // Aiguillage selon le type de transaction interne pour être robuste vis-à-vis
+    // des noms d'événements payout non confirmés.
+    // - Pour un DEPOT : événements transaction.approved / declined / canceled.
+    // - Pour un RETRAIT : événements payout.sent / failed
+    //   OU tout autre événement approuvé/refusé si FedaPay utilise d'autres noms.
+    // TODO(verifier) : noms exacts des événements payout FedaPay en sandbox.
+
     // Verrou pessimiste + transaction DB.
     await this.txRepo.manager.transaction(async (manager) => {
       const txLocked = await manager.getRepository(Transaction).findOne({
@@ -208,11 +251,17 @@ export class WebhookFedapayService {
         return;
       }
 
-      if (evenement === 'transaction.approved') {
+      const estApprouve = this.estEvenementApprouve(evenement, txLocked.type);
+      const estRefuse = this.estEvenementRefuse(evenement, txLocked.type);
+
+      if (estApprouve) {
         await this.transactionService.confirmer(transaction.id, manager);
-      } else {
-        // declined ou canceled → échoue.
+      } else if (estRefuse) {
         await this.transactionService.echouer(transaction.id, manager);
+      } else {
+        this.logger.warn(
+          `Webhook ${webhook.id} : événement ${evenement} inattendu pour type ${txLocked.type}.`,
+        );
       }
 
       await manager
@@ -224,26 +273,70 @@ export class WebhookFedapayService {
   }
 
   /**
-   * Extrait l'identifiant FedaPay de la transaction depuis le payload webhook.
-   * TODO(verifier) : structure exacte du payload webhook FedaPay en sandbox.
-   *   Testé : `payload.id` ou `payload.transaction.id`.
+   * Détermine si un événement FedaPay signifie une approbation selon le type
+   * de transaction interne.
+   */
+  private estEvenementApprouve(
+    evenement: string,
+    typeTransaction: TypeTransaction,
+  ): boolean {
+    if (typeTransaction === TypeTransaction.DEPOT) {
+      return evenement === 'transaction.approved';
+    }
+    // RETRAIT (payout)
+    return evenement === 'payout.sent';
+  }
+
+  /**
+   * Détermine si un événement FedaPay signifie un refus selon le type
+   * de transaction interne.
+   */
+  private estEvenementRefuse(
+    evenement: string,
+    typeTransaction: TypeTransaction,
+  ): boolean {
+    if (typeTransaction === TypeTransaction.DEPOT) {
+      return (
+        evenement === 'transaction.declined' ||
+        evenement === 'transaction.canceled'
+      );
+    }
+    // RETRAIT (payout)
+    return evenement === 'payout.failed';
+  }
+
+  /**
+   * Extrait l'identifiant FedaPay depuis le payload brut webhook.
+   *
+   * Structure réelle FedaPay sandbox (confirmée en test) :
+   *   { "name": "transaction.approved", "object": "transaction", "entity": { "id": 548479, ... } }
+   *
+   * On lit entity.id en priorité, puis les fallbacks historiques.
    */
   private extraireIdFedapay(payload: Record<string, unknown>): string | null {
-    if (
-      typeof payload['id'] === 'number' ||
-      typeof payload['id'] === 'string'
-    ) {
+    // Structure réelle : entity.id
+    const entity = payload['entity'] as Record<string, unknown> | undefined;
+    if (entity && (typeof entity['id'] === 'number' || typeof entity['id'] === 'string')) {
+      return String(entity['id']);
+    }
+
+    // Fallback : id à la racine
+    if (typeof payload['id'] === 'number' || typeof payload['id'] === 'string') {
       return String(payload['id']);
     }
-    const transaction = payload['transaction'] as
-      Record<string, unknown> | undefined;
-    if (
-      transaction &&
-      (typeof transaction['id'] === 'number' ||
-        typeof transaction['id'] === 'string')
-    ) {
+
+    // Fallback : transaction.id (ancienne structure supposée)
+    const transaction = payload['transaction'] as Record<string, unknown> | undefined;
+    if (transaction && (typeof transaction['id'] === 'number' || typeof transaction['id'] === 'string')) {
       return String(transaction['id']);
     }
+
+    // Fallback : payout.id
+    const payout = payload['payout'] as Record<string, unknown> | undefined;
+    if (payout && (typeof payout['id'] === 'number' || typeof payout['id'] === 'string')) {
+      return String(payout['id']);
+    }
+
     return null;
   }
 }

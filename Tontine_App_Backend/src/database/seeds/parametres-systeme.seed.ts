@@ -33,6 +33,11 @@ const parametres: Array<{ cle: string; valeur: string; description: string }> = 
     description: "Retenue (%) sur un retrait d'épargne à ou après échéance",
   },
   {
+    cle: 'epargne_minimale',
+    valeur: '1',
+    description: "Montant minimal d'un dépôt d'épargne (FCFA)",
+  },
+  {
     cle: 'mois_regularite_pret',
     valeur: '6',
     description: "Nombre de mois de régularité d'un prêt",

@@ -1,0 +1,112 @@
+﻿  console.log
+    [32mÔ£ö[0m [33mConsole Ninja[0m extension is connected to [33mNest.js[0m, see [36mhttps://tinyurl.com/2vt8jxzw[0m
+
+      at new nw (C:/Users/Pirate_Pedro/.vscode/extensions/wallabyjs.console-ninja-1.0.549/out/buildHook/index.js:1:4217587)
+
+node.exe : [31m[Nest] 13092  - [39m23/11/2026 
+14:45:40 [31m  ERROR[39m 
+[38;5;3m[RetraitEpargneService] [39m[31mErreur 
+FedaPay creerEtEnvoyerPayout (├®pargne) pour tx 20 : 
+KO[39m
+Au caractère Ligne:1 : 1
++ & "C:\Program Files\nodejs/node.exe" 
+"C:\Users\Pirate_Pedro\AppData\R ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([31m[Nest 
+   ] 130...tx 20 : KO[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  console.error
+    DEBUG pf= [{"soldeCotisation":0,"soldeEpargne":0,"soldeBloque":0}] ecr= [{"t":"retrait_epargne","s":"debit","m":9500},{"t":"penalite","s":"debit","m":500}]
+
+      737 |     );
+      738 |     // eslint-disable-next-line no-console
+    > 739 |     console.error('DEBUG pf=', JSON.stringify(manager._portefeuilleMaj), 'ecr=', JSON.stringify(manager._ecritures.map((e) => ({ t: e.type, s: e.sens, m: e.montant }))));
+          |             ^
+      740 |     expect(manager._portefeuilleMaj).toHaveLength(1);
+      741 |     // soldeEpargne = epargne_credit(10000) - epargne_debit(9500+500=10000) = 0.
+      742 |     expect(manager._portefeuilleMaj[0].soldeEpargne).toBe(0);
+
+      at Object.<anonymous> (retrait-epargne/retrait-epargne.service.spec.ts:739:13)
+
+FAIL 
+src/retrait-epargne/retrait-epargne.service.spec.ts 
+(26.021 s)
+  RetraitEpargneService
+    ÔêÜ rejette si ni montant ni total (400) (49 ms)
+    ÔêÜ rejette si montant ET total (400) (9 ms)
+    ÔêÜ rejette un jeton expir├® (401) (8 ms)
+    ÔêÜ rejette un jeton d'un autre membre (401) (8 ms)
+    ÔêÜ rejette un jeton rejou├® (401) (8 ms)
+    ÔêÜ rejette si l'├®pargne n'appartient pas au 
+membre (404) (9 ms)
+    ÔêÜ rejette si l'├®pargne est introuvable (404) (5 
+ms)
+    ÔêÜ rejette si l'├®pargne n'est plus active (422) 
+(6 ms)
+    ÔêÜ rejette si montant > solde de l'├®pargne (422) 
+(7 ms)
+    ÔêÜ rejette si un retrait d'├®pargne est d├®j├á en 
+attente (409) (7 ms)
+    ÔêÜ retrait avant l'├®ch├®ance : taux 5 %, retenue 
+500, net 9500 (10 000) (11 ms)
+    ÔêÜ retrait ├á l'├®ch├®ance : taux 2,75 %, retenue 
+275, net 9725 (10 000) (6 ms)
+    ÔêÜ retrait total = solde entier de l'├®pargne (5 
+ms)
+    ÔêÜ marque la transaction ECHOUE si FedaPay ├®choue 
+(8 ms)
+    ÔêÜ deux demandes simultan├®es avec le m├¬me jeton 
+: une seule passe (8 ms)
+    bascule du taux au jour de l'├®ch├®ance
+      ÔêÜ 22h30 UTC la veille ÔåÆ jour pr├®c├®dent au 
+B├®nin ÔåÆ anticip├® (5 %) (14 ms)
+      ÔêÜ 23h30 UTC la veille = jour d'├®ch├®ance au 
+B├®nin ÔåÆ retenue 2,75 % (8 ms)
+  TransactionService.confirmerRetraitEpargne
+    ÔêÜ retrait anticip├® (5 %) : ├®critures 
+retrait_epargne 9500 + p├®nalit├® 500, caisse source 
+penalite (11 ms)
+    ÔêÜ retrait ├á ├®ch├®ance (2,75 %) : 
+retenue_epargne 275, caisse source retenue_epargne (8 
+ms)
+    ÔêÜ retrait total : ├®pargne passe ├á 0 ÔåÆ statut 
+retir├®e (4 ms)
+    ÔêÜ retrait partiel : l'├®pargne reste active si le 
+solde > 0 (5 ms)
+    ÔêÜ portefeuille recalcul├® apr├¿s retrait 
+(soldeEpargne mis ├á jour) (13 ms)
+    ├ù ├®chec (echouer) : aucune ├®criture cr├®├®e (4 
+ms)
+
+  ÔùÅ TransactionService.confirmerRetraitEpargne ÔÇ║ 
+├®chec (echouer) : aucune ├®criture cr├®├®e
+
+    TypeError: manager.getRepository(...).update is not 
+a function
+
+      126 |     await manager
+      127 |       .getRepository(Transaction)
+    > 128 |       .update(transactionId, { statut: 
+StatutTransaction.ECHOUE });
+          |        ^
+      129 |   }
+      130 |
+      131 |   // ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö
+ÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔ
+öÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+ÔöÇÔöÇÔöÇÔöÇ
+
+      at TransactionService.echouer 
+(transaction/transaction.service.ts:128:8)
+      at Object.<anonymous> 
+(retrait-epargne/retrait-epargne.service.spec.ts:750:30)
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 22 passed, 23 total
+Snapshots:   0 total
+Time:        27.579 s
+Ran all test suites matching 
+src/retrait-epargne/retrait-epargne.service.spec.ts.
