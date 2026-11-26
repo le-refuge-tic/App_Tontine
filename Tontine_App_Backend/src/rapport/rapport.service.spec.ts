@@ -296,4 +296,105 @@ describe('RapportService', () => {
       '2026-12',
     );
   });
+
+  // ─── Libellés des écritures épargne ──────────────────────────────────────
+
+  it('libellés : Dépôt épargne, Retrait épargne, Pénalité retrait anticipé, Retenue de tenue du fonds', async () => {
+    const ecritures = [
+      fabriqueEcriture({
+        id: 30,
+        type: TypeEcriture.EPARGNE,
+        sens: SensEcriture.CREDIT,
+        montant: 5000,
+        description: 'Dépôt épargne',
+      }),
+      fabriqueEcriture({
+        id: 31,
+        type: TypeEcriture.RETRAIT_EPARGNE,
+        sens: SensEcriture.DEBIT,
+        montant: 4750,
+        description: 'Retrait épargne',
+      }),
+      fabriqueEcriture({
+        id: 32,
+        type: TypeEcriture.PENALITE,
+        sens: SensEcriture.DEBIT,
+        montant: 250,
+        description: 'Pénalité retrait anticipé',
+      }),
+      fabriqueEcriture({
+        id: 33,
+        type: TypeEcriture.RETENUE_EPARGNE,
+        sens: SensEcriture.DEBIT,
+        montant: 138,
+        description: 'Retenue de tenue du fonds',
+      }),
+    ];
+    ecritureRepoMock.createQueryBuilder.mockReturnValue(fabriqueQb(ecritures));
+    const rapport = await service.rapport(1, '2026-11');
+    const descs = rapport.ecritures.map((e) => e.description);
+    expect(descs).toContain('Dépôt épargne');
+    expect(descs).toContain('Retrait épargne');
+    expect(descs).toContain('Pénalité retrait anticipé');
+    expect(descs).toContain('Retenue de tenue du fonds');
+  });
+
+  // ─── Total retiré cotisation inchangé par un retrait d'épargne ───────────
+
+  it('un retrait d\'épargne n\'affecte pas le total retiré de cotisation', async () => {
+    const ecritures = [
+      // Retrait de cotisation classique → compte dans retire.
+      fabriqueEcriture({
+        id: 40,
+        type: TypeEcriture.RETRAIT,
+        sens: SensEcriture.DEBIT,
+        montant: 3000,
+      }),
+      // Retrait d'épargne (net versé) → NE compte PAS dans retire.
+      fabriqueEcriture({
+        id: 41,
+        type: TypeEcriture.RETRAIT_EPARGNE,
+        sens: SensEcriture.DEBIT,
+        montant: 4750,
+      }),
+      // Pénalité épargne → NE compte PAS dans retire.
+      fabriqueEcriture({
+        id: 42,
+        type: TypeEcriture.PENALITE,
+        sens: SensEcriture.DEBIT,
+        montant: 250,
+      }),
+    ];
+    ecritureRepoMock.createQueryBuilder.mockReturnValue(fabriqueQb(ecritures));
+    const rapport = await service.rapport(1, '2026-11');
+    // Seul le retrait de cotisation doit figurer dans retire.
+    expect(rapport.totaux.retire).toBe(3000);
+    // La somme épargne retirée est bien comptée séparément.
+    expect(rapport.totaux.epargneRetire).toBe(5000); // 4750 + 250
+  });
+
+  // ─── Total épargne déposée séparé du total cotisation ────────────────────
+
+  it('total épargneDepose est séparé du total cotise', async () => {
+    const ecritures = [
+      fabriqueEcriture({
+        id: 50,
+        type: TypeEcriture.COTISATION,
+        sens: SensEcriture.CREDIT,
+        montant: 1000,
+      }),
+      fabriqueEcriture({
+        id: 51,
+        type: TypeEcriture.EPARGNE,
+        sens: SensEcriture.CREDIT,
+        montant: 2000,
+      }),
+    ];
+    ecritureRepoMock.createQueryBuilder.mockReturnValue(fabriqueQb(ecritures));
+    const rapport = await service.rapport(1, '2026-11');
+    expect(rapport.totaux.cotise).toBe(1000);
+    expect(rapport.totaux.epargneDepose).toBe(2000);
+    // Les deux totaux sont indépendants.
+    expect(rapport.totaux.cotise + rapport.totaux.epargneDepose).toBe(3000);
+  });
 });

@@ -103,7 +103,9 @@ function fabriqueManager(
     }),
   };
   const retraitRepoInternal = {
-    create: jest.fn((d: Partial<RetraitEpargne>) => ({ ...d }) as RetraitEpargne),
+    create: jest.fn(
+      (d: Partial<RetraitEpargne>) => ({ ...d }) as RetraitEpargne,
+    ),
     save: jest.fn((r: Partial<RetraitEpargne>) =>
       Promise.resolve({ ...r, id: 1 } as RetraitEpargne),
     ),
@@ -137,7 +139,11 @@ describe('RetraitEpargneService', () => {
       { sub: id, purpose: 'retrait' },
       {
         secret: JWT_SECRET,
-        expiresIn: expiresIn as Parameters<typeof jwtService.sign>[1] extends { expiresIn?: infer E } ? E : never,
+        expiresIn: expiresIn as Parameters<typeof jwtService.sign>[1] extends {
+          expiresIn?: infer E;
+        }
+          ? E
+          : never,
         audience: 'tontine-retrait',
         jwtid: `jti-${Date.now()}-${Math.random()}`,
       },
@@ -235,7 +241,7 @@ describe('RetraitEpargneService', () => {
     ).rejects.toThrow(UnauthorizedException);
   });
 
-  it('rejette un jeton d\'un autre membre (401)', async () => {
+  it("rejette un jeton d'un autre membre (401)", async () => {
     configurerTransaction(fabriqueEpargne());
     const jeton = signerJeton(99);
     await expect(
@@ -255,7 +261,7 @@ describe('RetraitEpargneService', () => {
   });
 
   // ─── Appartenance / statut ────────────────────────────────────────────────
-  it('rejette si l\'épargne n\'appartient pas au membre (404)', async () => {
+  it("rejette si l'épargne n'appartient pas au membre (404)", async () => {
     const autreEpargne = fabriqueEpargne({ membre: fabriqueMembre({ id: 2 }) });
     configurerTransaction(autreEpargne);
     await expect(
@@ -263,31 +269,29 @@ describe('RetraitEpargneService', () => {
     ).rejects.toThrow(NotFoundException);
   });
 
-  it('rejette si l\'épargne est introuvable (404)', async () => {
+  it("rejette si l'épargne est introuvable (404)", async () => {
     configurerTransaction(null);
     await expect(
       service.creer(1, 1, { montant: 100, jetonRetrait: signerJeton(1) }),
     ).rejects.toThrow(NotFoundException);
   });
 
-  it('rejette si l\'épargne n\'est plus active (422)', async () => {
-    configurerTransaction(
-      fabriqueEpargne({ statut: StatutEpargne.RETIREE }),
-    );
+  it("rejette si l'épargne n'est plus active (422)", async () => {
+    configurerTransaction(fabriqueEpargne({ statut: StatutEpargne.RETIREE }));
     await expect(
       service.creer(1, 1, { montant: 100, jetonRetrait: signerJeton(1) }),
     ).rejects.toThrow(UnprocessableEntityException);
   });
 
   // ─── Montant ─────────────────────────────────────────────────────────────
-  it('rejette si montant > solde de l\'épargne (422)', async () => {
+  it("rejette si montant > solde de l'épargne (422)", async () => {
     configurerTransaction(fabriqueEpargne({ montant: 500 }));
     await expect(
       service.creer(1, 1, { montant: 600, jetonRetrait: signerJeton(1) }),
     ).rejects.toThrow(UnprocessableEntityException);
   });
 
-  it('rejette si un retrait d\'épargne est déjà en attente (409)', async () => {
+  it("rejette si un retrait d'épargne est déjà en attente (409)", async () => {
     configurerTransaction(fabriqueEpargne(), 1);
     await expect(
       service.creer(1, 1, { montant: 100, jetonRetrait: signerJeton(1) }),
@@ -295,13 +299,18 @@ describe('RetraitEpargneService', () => {
   });
 
   // ─── Calcul du taux et du net ────────────────────────────────────────────
-  it('retrait avant l\'échéance : taux 5 %, retenue 500, net 9500 (10 000)', async () => {
-    const epargne = fabriqueEpargne({ montant: 10000, dateEcheance: '2099-12-31' });
+  it("retrait avant l'échéance : taux 5 %, retenue 500, net 9500 (10 000)", async () => {
+    const epargne = fabriqueEpargne({
+      montant: 10000,
+      dateEcheance: '2099-12-31',
+    });
     configurerTransaction(epargne, 0, undefined, 10);
     fedapayFaux.definirIdFedapayPayout('PO-AVANT');
-    txRepoMock.save = jest.fn().mockImplementation((tx: Partial<Transaction>) =>
-      Promise.resolve({ ...tx, id: 10 } as Transaction),
-    );
+    txRepoMock.save = jest
+      .fn()
+      .mockImplementation((tx: Partial<Transaction>) =>
+        Promise.resolve({ ...tx, id: 10 } as Transaction),
+      );
     const { transaction } = await service.creer(1, 1, {
       montant: 10000,
       jetonRetrait: signerJeton(1),
@@ -313,14 +322,19 @@ describe('RetraitEpargneService', () => {
     expect(transaction.epargne).toMatchObject({ id: 1 });
   });
 
-  it('retrait à l\'échéance : taux 2,75 %, retenue 275, net 9725 (10 000)', async () => {
+  it("retrait à l'échéance : taux 2,75 %, retenue 275, net 9725 (10 000)", async () => {
     // dateEcheance dans le passé → à/après échéance → 2,75 %.
-    const epargne = fabriqueEpargne({ montant: 10000, dateEcheance: '2000-01-01' });
+    const epargne = fabriqueEpargne({
+      montant: 10000,
+      dateEcheance: '2000-01-01',
+    });
     configurerTransaction(epargne, 0, undefined, 11);
     fedapayFaux.definirIdFedapayPayout('PO-ECHEANCE');
-    txRepoMock.save = jest.fn().mockImplementation((tx: Partial<Transaction>) =>
-      Promise.resolve({ ...tx, id: 11 } as Transaction),
-    );
+    txRepoMock.save = jest
+      .fn()
+      .mockImplementation((tx: Partial<Transaction>) =>
+        Promise.resolve({ ...tx, id: 11 } as Transaction),
+      );
     const { transaction } = await service.creer(1, 1, {
       montant: 10000,
       jetonRetrait: signerJeton(1),
@@ -329,12 +343,19 @@ describe('RetraitEpargneService', () => {
     expect(transaction.montant).toBe(9725);
   });
 
-  it('retrait total = solde entier de l\'épargne', async () => {
-    const epargne = fabriqueEpargne({ montant: 4000, dateEcheance: '2099-12-31' });
+  it("retrait total = solde entier de l'épargne", async () => {
+    const epargne = fabriqueEpargne({
+      montant: 4000,
+      dateEcheance: '2099-12-31',
+    });
     configurerTransaction(epargne, 0, undefined, 12);
     fedapayFaux.definirIdFedapayPayout('PO-TOTAL');
     txRepoMock.save = jest.fn().mockImplementation((tx: Partial<Transaction>) =>
-      Promise.resolve({ ...tx, id: 12, estRetraitTotal: true } as Transaction),
+      Promise.resolve({
+        ...tx,
+        id: 12,
+        estRetraitTotal: true,
+      } as Transaction),
     );
     const { transaction } = await service.creer(1, 1, {
       total: true,
@@ -349,11 +370,13 @@ describe('RetraitEpargneService', () => {
   it('marque la transaction ECHOUE si FedaPay échoue', async () => {
     configurerTransaction(fabriqueEpargne(), 0, undefined, 20);
     const saved: Transaction[] = [];
-    txRepoMock.save = jest.fn().mockImplementation((tx: Partial<Transaction>) => {
-      const t = { ...tx, id: 20 } as Transaction;
-      saved.push(t);
-      return Promise.resolve(t);
-    });
+    txRepoMock.save = jest
+      .fn()
+      .mockImplementation((tx: Partial<Transaction>) => {
+        const t = { ...tx, id: 20 } as Transaction;
+        saved.push(t);
+        return Promise.resolve(t);
+      });
     jest
       .spyOn(fedapayFaux, 'creerEtEnvoyerPayout')
       .mockRejectedValue(new Error('KO'));
@@ -404,7 +427,7 @@ describe('RetraitEpargneService', () => {
   });
 
   // ─── Bascule du taux au jour de l'échéance (fuseau Africa/Porto-Novo) ──────
-  describe('bascule du taux au jour de l\'échéance', () => {
+  describe("bascule du taux au jour de l'échéance", () => {
     afterEach(() => jest.useRealTimers());
 
     it('22h30 UTC la veille → jour précédent au Bénin → anticipé (5 %)', async () => {
@@ -415,9 +438,11 @@ describe('RetraitEpargneService', () => {
         dateEcheance: '2026-07-31',
       });
       configurerTransaction(epargne, 0, undefined, 30);
-      txRepoMock.save = jest.fn().mockImplementation((tx: Partial<Transaction>) =>
-        Promise.resolve({ ...tx, id: 30 } as Transaction),
-      );
+      txRepoMock.save = jest
+        .fn()
+        .mockImplementation((tx: Partial<Transaction>) =>
+          Promise.resolve({ ...tx, id: 30 } as Transaction),
+        );
       const { transaction } = await service.creer(1, 1, {
         montant: 10000,
         jetonRetrait: signerJeton(1),
@@ -426,7 +451,7 @@ describe('RetraitEpargneService', () => {
       expect(transaction.montant).toBe(9500);
     });
 
-    it('23h30 UTC la veille = jour d\'échéance au Bénin → retenue 2,75 %', async () => {
+    it("23h30 UTC la veille = jour d'échéance au Bénin → retenue 2,75 %", async () => {
       // 2026-07-30 23:30 UTC = 2026-07-31 00:30 Porto-Novo → échéance atteinte.
       jest.useFakeTimers({ now: new Date('2026-07-30T23:30:00Z') });
       const epargne = fabriqueEpargne({
@@ -434,9 +459,11 @@ describe('RetraitEpargneService', () => {
         dateEcheance: '2026-07-31',
       });
       configurerTransaction(epargne, 0, undefined, 31);
-      txRepoMock.save = jest.fn().mockImplementation((tx: Partial<Transaction>) =>
-        Promise.resolve({ ...tx, id: 31 } as Transaction),
-      );
+      txRepoMock.save = jest
+        .fn()
+        .mockImplementation((tx: Partial<Transaction>) =>
+          Promise.resolve({ ...tx, id: 31 } as Transaction),
+        );
       const { transaction } = await service.creer(1, 1, {
         montant: 10000,
         jetonRetrait: signerJeton(1),
@@ -459,7 +486,9 @@ describe('TransactionService.confirmerRetraitEpargne', () => {
     fedapayFaux.definirFeesPayout(0);
     txRepoMock = {
       findOne: jest.fn(),
-      save: jest.fn().mockImplementation((tx: Transaction) => Promise.resolve(tx)),
+      save: jest
+        .fn()
+        .mockImplementation((tx: Transaction) => Promise.resolve(tx)),
     };
     notifMock = { create: jest.fn().mockResolvedValue(undefined) };
 
@@ -488,7 +517,12 @@ describe('TransactionService.confirmerRetraitEpargne', () => {
       joursCibles: null,
       estRetraitTotal: false,
       membre: { id: 1 },
-      epargne: { id: 1, montant: 10000, dateEcheance: '2099-12-31', statut: StatutEpargne.ACTIVE },
+      epargne: {
+        id: 1,
+        montant: 10000,
+        dateEcheance: '2099-12-31',
+        statut: StatutEpargne.ACTIVE,
+      },
       retraitEpargne: {
         id: 1,
         montant: 10000,
@@ -593,11 +627,9 @@ describe('TransactionService.confirmerRetraitEpargne', () => {
     const portefeuilleRepoMock = {
       update: jest
         .fn()
-        .mockImplementation(
-          async (_w: unknown, v: Partial<Portefeuille>) => {
-            portefeuilleMaj.push(v);
-          },
-        ),
+        .mockImplementation(async (_w: unknown, v: Partial<Portefeuille>) => {
+          portefeuilleMaj.push(v);
+        }),
     };
     const txRepoInternal = {
       findOne: jest.fn().mockResolvedValue(tx),
@@ -644,8 +676,9 @@ describe('TransactionService.confirmerRetraitEpargne', () => {
     expect(retraitEcr!.montant + penaliteEcr!.montant).toBe(10000);
     // CaisseApplication source penalite.
     expect(manager._caisses).toHaveLength(1);
-    expect((manager._caisses[0] as unknown as Record<string, unknown>)['source'])
-      .toBe(SourceCaisse.PENALITE);
+    expect(
+      (manager._caisses[0] as unknown as Record<string, unknown>)['source'],
+    ).toBe(SourceCaisse.PENALITE);
     // Aucune écriture n'est liée à un cycle.
     expect(manager._ecritures.every((e) => e.cycle === null)).toBe(true);
   });
@@ -676,8 +709,9 @@ describe('TransactionService.confirmerRetraitEpargne', () => {
     expect(retenueEcr).toBeDefined();
     expect(retenueEcr!.montant).toBe(275);
     expect(retraitEcr!.montant + retenueEcr!.montant).toBe(10000);
-    expect((manager._caisses[0] as unknown as Record<string, unknown>)['source'])
-      .toBe(SourceCaisse.RETENUE_EPARGNE);
+    expect(
+      (manager._caisses[0] as unknown as Record<string, unknown>)['source'],
+    ).toBe(SourceCaisse.RETENUE_EPARGNE);
   });
 
   it('retrait total : épargne passe à 0 → statut retirée', async () => {
@@ -702,7 +736,7 @@ describe('TransactionService.confirmerRetraitEpargne', () => {
     expect(epargneMaj.statut).toBe(StatutEpargne.RETIREE);
   });
 
-  it('retrait partiel : l\'épargne reste active si le solde > 0', async () => {
+  it("retrait partiel : l'épargne reste active si le solde > 0", async () => {
     const tx = fabriqueTransaction({
       montant: 4750, // 5000 - 250 (5%)
       epargne: {
@@ -752,5 +786,246 @@ describe('TransactionService.confirmerRetraitEpargne', () => {
     );
     // echouer ne fait que passer le statut à ECHOUE : aucune écriture.
     expect(manager._ecritures).toHaveLength(0);
+  });
+
+  // ─── Point 5 : une transaction RETRAIT avec epargne_id ne passe jamais ────
+  //              par confirmerDepot() (logique cotisation).
+
+  it('confirmer() : RETRAIT + epargne_id → confirmerRetraitEpargne, jamais confirmerDepot', async () => {
+    // La transaction a type=RETRAIT ET epargne non null → confirmerRetraitEpargne.
+    // On prouve que confirmerDepot() n'a pas été invoqué en vérifiant :
+    // - Aucune écriture COTISATION (hallmark de confirmerDepot).
+    // - Une écriture RETRAIT_EPARGNE existe (hallmark de confirmerRetraitEpargne).
+    const tx = fabriqueTransaction({ montant: 9500 });
+    // tx.type est déjà TypeTransaction.RETRAIT et tx.epargne est non null.
+    expect(tx.type).toBe(TypeTransaction.RETRAIT);
+    expect(tx.epargne).not.toBeNull();
+    const manager = fabriqueManager(tx);
+    await transactionService.confirmer(
+      1,
+      manager as unknown as Parameters<typeof transactionService.confirmer>[1],
+    );
+    // Pas de COTISATION → confirmerDepot n'a pas été appelé.
+    expect(
+      manager._ecritures.some((e) => e.type === TypeEcriture.COTISATION),
+    ).toBe(false);
+    // RETRAIT_EPARGNE présent → confirmerRetraitEpargne a bien été appelé.
+    expect(
+      manager._ecritures.some((e) => e.type === TypeEcriture.RETRAIT_EPARGNE),
+    ).toBe(true);
+  });
+
+  // ─── Webhook rejoué (double confirmation) : idempotence ──────────────────
+
+  it('webhook rejoué : confirmer() sur une transaction déjà REUSSI — aucune écriture supplémentaire', async () => {
+    // Après la première confirmation, la transaction passe à REUSSI.
+    // Le second appel (webhook rejoué) doit être ignoré :
+    // - Aucune nouvelle EcritureComptable ne doit être créée.
+    // - Aucune nouvelle ligne CaisseApplication ne doit être créée.
+    // - Epargne.montant ne doit pas bouger une seconde fois.
+    // - Le portefeuille ne doit pas être recalculé une seconde fois.
+    const tx = fabriqueTransaction({
+      montant: 9500,
+      statut: StatutTransaction.EN_ATTENTE,
+    });
+    const manager = fabriqueManager(tx);
+
+    // Première confirmation.
+    await transactionService.confirmer(
+      1,
+      manager as unknown as Parameters<typeof transactionService.confirmer>[1],
+    );
+    const ecrituresApres1 = manager._ecritures.length;
+    const caissesApres1 = manager._caisses.length;
+    const epargneMajApres1 = manager._epargnesMaj.length;
+    const portefeuilleApres1 = manager._portefeuilleMaj.length;
+
+    // Simuler que la transaction est maintenant REUSSI (comme elle le serait en DB
+    // après la première confirmation).
+    const txRepoInternal = (
+      manager.getRepository as (e: { name: string }) => {
+        findOne: jest.Mock;
+        save: jest.Mock;
+      }
+    )({ name: 'Transaction' });
+    txRepoInternal.findOne.mockResolvedValue({
+      ...tx,
+      statut: StatutTransaction.REUSSI,
+    });
+
+    // Deuxième appel (webhook rejoué).
+    await transactionService.confirmer(
+      1,
+      manager as unknown as Parameters<typeof transactionService.confirmer>[1],
+    );
+
+    // Aucune écriture ni ligne caisse supplémentaire.
+    expect(manager._ecritures.length).toBe(ecrituresApres1);
+    expect(manager._caisses.length).toBe(caissesApres1);
+    expect(manager._epargnesMaj.length).toBe(epargneMajApres1);
+    expect(manager._portefeuilleMaj.length).toBe(portefeuilleApres1);
+  });
+
+  it('idempotence — dépôt épargne : deux confirmations séquentielles → même état', async () => {
+    // Créer une transaction de DEPOT liée à une épargne.
+    const txDepot = Object.assign(new Transaction(), {
+      id: 2,
+      type: TypeTransaction.DEPOT,
+      montant: 5000,
+      fraisFedapay: 0,
+      referenceUnique: 'TX-1-DEP',
+      idFedapay: 'TX200',
+      statut: StatutTransaction.EN_ATTENTE,
+      membre: { id: 1 },
+      epargne: {
+        id: 1,
+        montant: 0,
+        dateEcheance: '2099-12-31',
+        statut: StatutEpargne.ACTIVE,
+      },
+      retraitEpargne: undefined,
+    });
+    const managerDepot = fabriqueManager(txDepot);
+
+    // Première confirmation.
+    await transactionService.confirmer(
+      2,
+      managerDepot as unknown as Parameters<
+        typeof transactionService.confirmer
+      >[1],
+    );
+    const nbEcr1 = managerDepot._ecritures.length;
+    const nbCaisse1 = managerDepot._caisses.length;
+    const epargneVal1 = managerDepot._epargnesMaj[0]?.montant;
+    const soldeEpargne1 = managerDepot._portefeuilleMaj[0]?.soldeEpargne;
+
+    // Simuler que la transaction est maintenant REUSSI.
+    const txDepotRepo = (
+      managerDepot.getRepository as (e: { name: string }) => {
+        findOne: jest.Mock;
+      }
+    )({ name: 'Transaction' });
+    txDepotRepo.findOne.mockResolvedValue({
+      ...txDepot,
+      statut: StatutTransaction.REUSSI,
+    });
+
+    // Deuxième confirmation.
+    await transactionService.confirmer(
+      2,
+      managerDepot as unknown as Parameters<
+        typeof transactionService.confirmer
+      >[1],
+    );
+
+    // Les compteurs ne bougent pas.
+    expect(managerDepot._ecritures.length).toBe(nbEcr1);
+    expect(managerDepot._caisses.length).toBe(nbCaisse1);
+    expect(managerDepot._epargnesMaj.length).toBe(1); // un seul save
+    expect(managerDepot._epargnesMaj[0].montant).toBe(epargneVal1);
+    expect(managerDepot._portefeuilleMaj[0]?.soldeEpargne).toBe(soldeEpargne1);
+  });
+
+  it('idempotence — retrait épargne : deux confirmations parallèles → même état (une seule écriture)', async () => {
+    // Deux webhooks arrivent simultanément pour la même transaction.
+    // Le premier acquiert le verrou et traite ; le second trouve statut = REUSSI
+    // et sort sans rien faire.
+    const tx = fabriqueTransaction({
+      montant: 9500,
+      statut: StatutTransaction.EN_ATTENTE,
+    });
+
+    // Chaque appel reçoit son propre manager (simulation de deux requêtes DB),
+    // mais ils partagent l'état via les tableaux d'écritures.
+    // On simule en faisant que le second manager voit la tx déjà REUSSI.
+    const manager1 = fabriqueManager(tx);
+    const manager2 = fabriqueManager({
+      ...tx,
+      statut: StatutTransaction.REUSSI,
+    });
+
+    const [r1, r2] = await Promise.allSettled([
+      transactionService.confirmer(
+        1,
+        manager1 as unknown as Parameters<
+          typeof transactionService.confirmer
+        >[1],
+      ),
+      transactionService.confirmer(
+        1,
+        manager2 as unknown as Parameters<
+          typeof transactionService.confirmer
+        >[1],
+      ),
+    ]);
+
+    // Les deux appels se terminent sans exception.
+    expect(r1.status).toBe('fulfilled');
+    expect(r2.status).toBe('fulfilled');
+
+    // manager1 a créé les écritures normalement (tx EN_ATTENTE).
+    expect(manager1._ecritures).toHaveLength(2); // retrait_epargne + penalite
+    expect(manager1._caisses).toHaveLength(1);
+    expect(manager1._epargnesMaj).toHaveLength(1);
+
+    // manager2 n'a rien créé (tx déjà REUSSI).
+    expect(manager2._ecritures).toHaveLength(0);
+    expect(manager2._caisses).toHaveLength(0);
+    expect(manager2._epargnesMaj).toHaveLength(0);
+  });
+
+  it('idempotence — dépôt épargne : deux confirmations parallèles → même état', async () => {
+    const txDepot = Object.assign(new Transaction(), {
+      id: 3,
+      type: TypeTransaction.DEPOT,
+      montant: 5000,
+      fraisFedapay: 0,
+      referenceUnique: 'TX-DEP-PARA',
+      idFedapay: 'TX300',
+      statut: StatutTransaction.EN_ATTENTE,
+      membre: { id: 1 },
+      epargne: {
+        id: 1,
+        montant: 0,
+        dateEcheance: '2099-12-31',
+        statut: StatutEpargne.ACTIVE,
+      },
+      retraitEpargne: undefined,
+    });
+
+    // manager A voit la tx EN_ATTENTE, manager B voit déjà REUSSI.
+    const managerA = fabriqueManager(txDepot);
+    const managerB = fabriqueManager({
+      ...txDepot,
+      statut: StatutTransaction.REUSSI,
+    });
+
+    const [rA, rB] = await Promise.allSettled([
+      transactionService.confirmer(
+        3,
+        managerA as unknown as Parameters<
+          typeof transactionService.confirmer
+        >[1],
+      ),
+      transactionService.confirmer(
+        3,
+        managerB as unknown as Parameters<
+          typeof transactionService.confirmer
+        >[1],
+      ),
+    ]);
+
+    expect(rA.status).toBe('fulfilled');
+    expect(rB.status).toBe('fulfilled');
+
+    // managerA : 1 écriture EPARGNE crédit, epargne.montant augmenté.
+    expect(managerA._ecritures).toHaveLength(1);
+    expect(managerA._ecritures[0].type).toBe(TypeEcriture.EPARGNE);
+    expect(managerA._epargnesMaj).toHaveLength(1);
+
+    // managerB : aucun effet.
+    expect(managerB._ecritures).toHaveLength(0);
+    expect(managerB._epargnesMaj).toHaveLength(0);
+    expect(managerB._portefeuilleMaj).toHaveLength(0);
   });
 });

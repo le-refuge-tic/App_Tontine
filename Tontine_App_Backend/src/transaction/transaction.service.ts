@@ -85,20 +85,35 @@ export class TransactionService {
    * liée (`transaction.epargne`), et non sur le `type` (les dépôts et retraits
    * d'épargne partagent les mêmes valeurs d'enum `depot`/`retrait` que la
    * cotisation).
+   *
+   * Idempotence : si la transaction n'est plus EN_ATTENTE (déjà REUSSI ou
+   * ECHOUE), cette méthode retourne immédiatement sans aucune écriture ni
+   * recalcul. Le verrou pessimiste est posé sur la ligne Transaction elle-même
+   * afin que deux webhooks simultanés ne passent pas tous les deux.
    */
   async confirmer(
     transactionId: number,
     manager: EntityManager,
   ): Promise<void> {
     const txRepo = manager.getRepository(Transaction);
+
+    // Verrou pessimiste + contrôle d'idempotence dans la même transaction DB.
+    // Deux webhooks simultanés acquièrent le verrou l'un après l'autre ;
+    // le second trouve statut !== EN_ATTENTE et sort sans rien faire.
     const transaction = await txRepo.findOne({
       where: { id: transactionId },
+      lock: { mode: 'pessimistic_write' },
       relations: { membre: true, epargne: true, retraitEpargne: true },
     });
     if (!transaction) {
       throw new NotFoundException(
         `Transaction introuvable : ${transactionId}.`,
       );
+    }
+
+    // Idempotence : ne rien faire si la transaction n'est plus EN_ATTENTE.
+    if (transaction.statut !== StatutTransaction.EN_ATTENTE) {
+      return;
     }
 
     // Opération d'épargne ?
@@ -409,13 +424,13 @@ export class TransactionService {
   /**
    * Confirme un dépôt d'épargne approuvé par FedaPay. Effets :
    *
-   * 1. Met le statut à `reussi` et relit les frais réels depuis FedaPay.
-   * 2. Écriture grand livre `epargne` (crédit) du montant épargné.
-   *    Montant épargné = `transaction.montant − fraisFedapay` : les frais
-   *    FedaPay sont *ajoutés* au montant payé (modèle cotisation), donc la
-   *    somme réellement créditée à l'épargne est le total payé moins les
-   *    frais. Avec `pourcentage_frais_fedapay = 0` (défaut), montant épargné =
-   *    `transaction.montant`.
+   * 1. Capture les frais estimés (mémorisés sur `transaction.fraisFedapay` à
+   *    la création), puis relit les frais réels depuis FedaPay (mise à jour
+   *    informative uniquement sur la transaction).
+   * 2. Écriture grand livre `epargne` (crédit) du montant demandé par le
+   *    membre : `transaction.montant − fraisEstimés`. Cette valeur est fixe
+   *    et indépendante des frais réels renvoyés par FedaPay, ce qui garantit
+   *    que l'épargne reçoit toujours exactement le montant commandé.
    * 3. Met à jour `Epargne.montant` (cache, recalculable depuis le grand
    *    livre).
    * 4. Recalcule le portefeuille (`soldeEpargne` mis à jour).
@@ -428,7 +443,22 @@ export class TransactionService {
   ): Promise<void> {
     const txRepo = manager.getRepository(Transaction);
 
-    // 1. Relire les frais réels depuis FedaPay.
+    // Capturer les frais estimés AVANT de relire les frais réels FedaPay :
+    // le montant épargné doit être exactement `transaction.montant − fraisEstimés`
+    // (= le montant demandé par le membre), quelle que soit la valeur réelle
+    // renvoyée par FedaPay. Ainsi l'épargne reçoit toujours le montant commandé,
+    // et les éventuels écarts entre frais estimés et frais réels n'affectent
+    // que le champ informatif `fraisFedapay` sur la transaction.
+    const fraisEstimes = transaction.fraisFedapay;
+    const montantEpargne = Math.max(0, transaction.montant - fraisEstimes);
+
+    // TODO(decision) : quand les frais réels FedaPay diffèrent des frais estimés,
+    // l'application absorbe l'écart (provisoire). Le montant crédité à l'épargne
+    // reste toujours `transaction.montant − fraisEstimés`, indépendamment des
+    // frais réels renvoyés par FedaPay. Les frais réels ne sont mis à jour que
+    // sur le champ informatif `fraisFedapay` de la transaction.
+
+    // 1. Relire les frais réels depuis FedaPay (mise à jour informative uniquement).
     if (transaction.idFedapay) {
       try {
         const fedaTx = await this.fedapayClient.lireTransaction(
@@ -445,15 +475,6 @@ export class TransactionService {
     await txRepo.save(transaction);
 
     const membreId = transaction.membre.id;
-    // TODO(decision) : frais FedaPay ajoutés au montant (provisoire) → base
-    //   épargnée = total − frais. Robuste tant que `pourcentage_frais_fedapay`
-    //   reste à 0 (frais estimés = frais réels = 0). Avec des frais non nuls
-    //   différant de l'estimation, le montant crédité pourrait différer du
-    //   montant initial demandé.
-    const montantEpargne = Math.max(
-      0,
-      transaction.montant - transaction.fraisFedapay,
-    );
 
     const ecritureRepo = manager.getRepository(EcritureComptable);
 
