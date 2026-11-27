@@ -14,6 +14,7 @@ interface BarreOngletsProps {
 const ONGLETS: Record<string, { icone: NomIcone; iconeActive: NomIcone; libelle: string }> = {
   index: { icone: "home-outline", iconeActive: "home", libelle: "Accueil" },
   cotiser: { icone: "add-circle-outline", iconeActive: "add-circle", libelle: "Cotiser" },
+  projets: { icone: "wallet-outline", iconeActive: "wallet", libelle: "Projets" },
   retirer: { icone: "arrow-up-circle-outline", iconeActive: "arrow-up-circle", libelle: "Retirer" },
   rapport: { icone: "bar-chart-outline", iconeActive: "bar-chart", libelle: "Rapport" },
 };

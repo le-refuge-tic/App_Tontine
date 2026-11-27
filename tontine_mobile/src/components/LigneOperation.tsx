@@ -52,6 +52,11 @@ export function LigneOperation({ ecriture }: Props) {
   const signe = estCredit ? "+" : "−";
   const couleurMontant = estCredit ? theme.couleurs.succes : theme.couleurs.textePrimaire;
 
+  // Afficher le nom du projet si disponible (écriture liée à une épargne).
+  const descriptionAffichee = ecriture.projetNom
+    ? `${ecriture.description} · ${ecriture.projetNom}`
+    : ecriture.description;
+
   return (
     <View style={styles.ligne}>
       <View style={[styles.rond, { backgroundColor: a.couleurFond }]}>
@@ -59,7 +64,7 @@ export function LigneOperation({ ecriture }: Props) {
       </View>
       <View style={styles.texte}>
         <Text style={[theme.typographie.corpsMedium, { color: theme.couleurs.textePrimaire }]} numberOfLines={1}>
-          {ecriture.description}
+          {descriptionAffichee}
         </Text>
         <Text style={[theme.typographie.corps2, { color: theme.couleurs.texteSecondaire }]}>
           {formaterRelatif(ecriture.date)} · {formaterDateHeure(ecriture.date)}

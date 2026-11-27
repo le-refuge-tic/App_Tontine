@@ -5,10 +5,17 @@
  * Stratégie :
  * - FedapayClientFaux (aucun appel réseau).
  * - Mocks manuels des Repository TypeORM (tokens `${Entity.name}Repository`).
+ *
+ * Depuis le prompt 7b :
+ * - dateEcheance n'est plus demandée (ignorée si envoyée).
+ * - objectifMontant est obligatoire.
+ * - Les tests basés sur la date (échéance passée/future, bascule du taux à
+ *   23h30) sont retirés ou adaptés : le taux dépend désormais de l'objectif.
  */
 
 import {
   BadRequestException,
+  ConflictException,
   NotFoundException,
   ServiceUnavailableException,
   UnprocessableEntityException,
@@ -35,6 +42,9 @@ import {
   TypeEcriture,
   TypeTransaction,
 } from '../common/enums';
+import { validateSync } from 'class-validator';
+import { plainToClass } from 'class-transformer';
+import { CreateEpargneDto } from './dto/create-epargne.dto';
 
 // ─── Tokens TypeORM ───────────────────────────────────────────────────────────
 const EPARGNE_REPO = `${Epargne.name}Repository`;
@@ -55,8 +65,11 @@ function fabriqueEpargne(overrides: Partial<Epargne> = {}): Epargne {
   return Object.assign(new Epargne(), {
     id: 1,
     montant: 0,
-    dateEcheance: '2099-12-31',
+    dateEcheance: null,
     statut: StatutEpargne.ACTIVE,
+    nom: 'Mon projet',
+    objectifMontant: 10000,
+    objectifAtteintLe: null,
     membre: fabriqueMembre(),
     ...overrides,
   });
@@ -137,32 +150,95 @@ describe('EpargneService', () => {
   });
 
   // ─── Création + dépôt initial ─────────────────────────────────────────────
-  it("crée l'épargne (montant 0, active) et le dépôt initial, renvoie urlPaiement", async () => {
+
+  it('création sans dateEcheance : OK (ignorée silencieusement)', async () => {
     const { epargne, transaction, urlPaiement } = await service.creer(1, {
       montantInitial: 5000,
-      dateEcheance: '2099-12-31',
+      nom: 'Achat moto',
+      objectifMontant: 50000,
     });
-    expect(epargne.montant).toBe(0); // non crédité tant que le dépôt n'est pas confirmé
+    expect(epargne.montant).toBe(0);
     expect(epargne.statut).toBe(StatutEpargne.ACTIVE);
-    expect(epargne.dateEcheance).toBe('2099-12-31');
+    expect(epargne.dateEcheance).toBeNull();
+    expect(epargne.nom).toBe('Achat moto');
+    expect(epargne.objectifMontant).toBe(50000);
+    expect(epargne.progressionPourcent).toBe(0);
     expect(transaction.type).toBe(TypeTransaction.DEPOT);
     expect(transaction.statut).toBe(StatutTransaction.EN_ATTENTE);
-    expect(transaction.montant).toBe(5000); // frais = 0
+    expect(transaction.montant).toBe(5000);
     expect(transaction.epargne).toMatchObject({ id: 1 });
     expect(urlPaiement).toContain('fedapay.com');
     expect(epargneRepoMock.save).toHaveBeenCalledTimes(1);
   });
 
-  it("rejette une date d'échéance dans le passé (400)", async () => {
-    await expect(
-      service.creer(1, { montantInitial: 5000, dateEcheance: '2000-01-01' }),
-    ).rejects.toThrow(BadRequestException);
+  it('création avec dateEcheance envoyée : ignorée sans erreur', async () => {
+    // dateEcheance est @IsOptional() et ignorée côté service.
+    const { epargne } = await service.creer(1, {
+      montantInitial: 5000,
+      nom: 'Test',
+      objectifMontant: 10000,
+      dateEcheance: '2000-01-01', // passé → ne doit pas lever d'erreur
+    });
+    expect(epargne.dateEcheance).toBeNull();
+  });
+
+  it('création sans objectifMontant → refusé par le DTO (class-validator)', () => {
+    const dto = plainToClass(CreateEpargneDto, {
+      montantInitial: 5000,
+      nom: 'Test',
+      // objectifMontant absent
+    });
+    const errors = validateSync(dto);
+    const objectifErrors = errors.filter(
+      (e) => e.property === 'objectifMontant',
+    );
+    expect(objectifErrors.length).toBeGreaterThan(0);
+  });
+
+  it('objectif 1 accepté par le DTO', () => {
+    const dto = plainToClass(CreateEpargneDto, {
+      montantInitial: 1,
+      nom: 'Test minimum',
+      objectifMontant: 1,
+    });
+    const errors = validateSync(dto);
+    expect(errors).toHaveLength(0);
+  });
+
+  it('objectif 0 refusé par le DTO (Min 1)', () => {
+    const dto = plainToClass(CreateEpargneDto, {
+      montantInitial: 5000,
+      nom: 'Test',
+      objectifMontant: 0,
+    });
+    const errors = validateSync(dto);
+    const objectifErrors = errors.filter(
+      (e) => e.property === 'objectifMontant',
+    );
+    expect(objectifErrors.length).toBeGreaterThan(0);
+  });
+
+  it('objectif négatif refusé par le DTO', () => {
+    const dto = plainToClass(CreateEpargneDto, {
+      montantInitial: 5000,
+      nom: 'Test',
+      objectifMontant: -100,
+    });
+    const errors = validateSync(dto);
+    const objectifErrors = errors.filter(
+      (e) => e.property === 'objectifMontant',
+    );
+    expect(objectifErrors.length).toBeGreaterThan(0);
   });
 
   it('rejette un montant inférieur au minimum (400)', async () => {
     parametresMock.getNumber.mockImplementationOnce(async () => 100);
     await expect(
-      service.creer(1, { montantInitial: 50, dateEcheance: '2099-12-31' }),
+      service.creer(1, {
+        montantInitial: 50,
+        nom: 'Test',
+        objectifMontant: 10000,
+      }),
     ).rejects.toThrow(BadRequestException);
   });
 
@@ -172,39 +248,50 @@ describe('EpargneService', () => {
       .mockRejectedValue(new Error('Réseau KO'));
     const saved: Transaction[] = [];
     txRepoMock.save = jest.fn().mockImplementation(async (t: Transaction) => {
-      const out = { ...t, id: 100 } as Transaction;
+      const out = { ...t, id: 100 };
       saved.push(out);
       return out;
     });
     await expect(
-      service.creer(1, { montantInitial: 5000, dateEcheance: '2099-12-31' }),
+      service.creer(1, {
+        montantInitial: 5000,
+        nom: 'Test',
+        objectifMontant: 10000,
+      }),
     ).rejects.toThrow(ServiceUnavailableException);
     expect(saved.some((t) => t.statut === StatutTransaction.ECHOUE)).toBe(true);
   });
 
-  it('anti double-clic : renvoie la transaction existante (< 10 min, même échéance)', async () => {
+  it('anti double-clic : renvoie la transaction existante (< 10 min, même objectif)', async () => {
     const existante = Object.assign(new Transaction(), {
       id: 77,
       type: TypeTransaction.DEPOT,
       montant: 5000,
       statut: StatutTransaction.EN_ATTENTE,
       dateOperation: new Date(),
-      epargne: fabriqueEpargne({ id: 3, dateEcheance: '2099-12-31' }),
+      epargne: fabriqueEpargne({ id: 3, objectifMontant: 50000 }),
     });
     txRepoMock.find.mockResolvedValue([existante]);
     const { transaction, urlPaiement } = await service.creer(1, {
       montantInitial: 5000,
-      dateEcheance: '2099-12-31',
+      nom: 'Test',
+      objectifMontant: 50000,
     });
     expect(transaction.id).toBe(77);
     expect(urlPaiement).toBeNull();
-    expect(epargneRepoMock.save).not.toHaveBeenCalled(); // aucune nouvelle épargne
+    expect(epargneRepoMock.save).not.toHaveBeenCalled();
   });
 
   // ─── Dépôt additionnel ────────────────────────────────────────────────────
+
   it('ajoute un dépôt à une épargne active', async () => {
     epargneRepoMock.findOne.mockResolvedValue(
-      fabriqueEpargne({ id: 5, montant: 3000, statut: StatutEpargne.ACTIVE }),
+      fabriqueEpargne({
+        id: 5,
+        montant: 3000,
+        statut: StatutEpargne.ACTIVE,
+        objectifMontant: 10000,
+      }),
     );
     const { transaction, urlPaiement } = await service.ajouterDepot(1, 5, {
       montant: 2000,
@@ -241,6 +328,7 @@ describe('EpargneService', () => {
   });
 
   // ─── Lecture + aperçu ─────────────────────────────────────────────────────
+
   it("findOne 404 si l'épargne n'appartient pas au membre", async () => {
     epargneRepoMock.findOne.mockResolvedValue(
       fabriqueEpargne({ membre: fabriqueMembre({ id: 2 }) }),
@@ -248,41 +336,93 @@ describe('EpargneService', () => {
     await expect(service.findOne(1, 1)).rejects.toThrow(NotFoundException);
   });
 
-  it("aperçu : taux 5 % avant l'échéance, 2,75 % à ou après", async () => {
-    // Avant échéance (dateEcheance future) → 5 %.
-    epargneRepoMock.findOne.mockResolvedValueOnce(
-      fabriqueEpargne({ id: 1, montant: 10000, dateEcheance: '2099-12-31' }),
+  it('aperçu objectif non atteint : taux 5 %', async () => {
+    // montant 5000 < objectif 10000 → pénalité 5 %
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({
+        id: 1,
+        montant: 5000,
+        objectifMontant: 10000,
+        objectifAtteintLe: null,
+      }),
     );
-    const vueAvant = await service.findOne(1, 1);
-    expect(vueAvant.apercu.tauxApplicable).toBe(5);
-    expect(vueAvant.apercu.penaliteSiRetraitMaintenant).toBe(500);
-    expect(vueAvant.apercu.netEstime).toBe(9500);
+    const vue = await service.findOne(1, 1);
+    expect(vue.apercu.tauxApplicable).toBe(5);
+    expect(vue.apercu.penaliteSiRetraitMaintenant).toBe(250); // ceil(5000 * 5 / 100)
+    expect(vue.apercu.netEstime).toBe(4750);
+    expect(vue.apercu.objectifAtteint).toBe(false);
+    expect(vue.apercu.resteAAtteindre).toBe(5000);
+  });
 
-    // À/après échéance (date passée) → 2,75 %.
-    epargneRepoMock.findOne.mockResolvedValueOnce(
-      fabriqueEpargne({ id: 1, montant: 10000, dateEcheance: '2000-01-01' }),
+  it('aperçu objectif atteint (montant exactement = objectif) : taux 2,75 %', async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({
+        id: 1,
+        montant: 10000,
+        objectifMontant: 10000,
+        objectifAtteintLe: null,
+      }),
     );
-    const vueApres = await service.findOne(1, 1);
-    expect(vueApres.apercu.tauxApplicable).toBe(2.75);
-    expect(vueApres.apercu.penaliteSiRetraitMaintenant).toBe(275);
-    expect(vueApres.apercu.netEstime).toBe(9725);
+    const vue = await service.findOne(1, 1);
+    expect(vue.apercu.tauxApplicable).toBe(2.75);
+    expect(vue.apercu.penaliteSiRetraitMaintenant).toBe(275);
+    expect(vue.apercu.netEstime).toBe(9725);
+    expect(vue.apercu.objectifAtteint).toBe(true);
+    expect(vue.apercu.resteAAtteindre).toBe(0);
+  });
+
+  it('aperçu objectif acquis (objectifAtteintLe non null) : taux 2,75 % même si montant < objectif', async () => {
+    // Après un retrait partiel, le montant est retombé sous l'objectif, mais
+    // objectifAtteintLe est renseigné → l'objectif reste acquis.
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({
+        id: 1,
+        montant: 3000,
+        objectifMontant: 10000,
+        objectifAtteintLe: new Date('2026-01-01T12:00:00Z'),
+      }),
+    );
+    const vue = await service.findOne(1, 1);
+    expect(vue.apercu.tauxApplicable).toBe(2.75);
+    expect(vue.apercu.objectifAtteint).toBe(true);
+    // resteAAtteindre = max(0, objectif - montant) = max(0, 10000 - 3000) = 7000
+    // (c'est un indicateur de progression, pas une condition de taux)
+    expect(vue.apercu.resteAAtteindre).toBe(7000);
   });
 
   it('findAll renvoie les épargnes du membre avec aperçu', async () => {
     epargneRepoMock.find.mockResolvedValue([
-      fabriqueEpargne({ id: 1, montant: 2000 }),
-      fabriqueEpargne({ id: 2, montant: 8000 }),
+      fabriqueEpargne({ id: 1, montant: 2000, objectifMontant: 10000 }),
+      fabriqueEpargne({ id: 2, montant: 8000, objectifMontant: 10000 }),
     ]);
     const vues = await service.findAll(1);
     expect(vues).toHaveLength(2);
     expect(vues[0].apercu).toBeDefined();
-    expect(vues[0].apercu.tauxApplicable).toBe(5); // échéance future
+    expect(vues[0].apercu.objectifAtteint).toBe(false);
+    expect(vues[1].apercu.objectifAtteint).toBe(false); // 8000 < 10000
   });
 
-  // ─── Frais FedaPay ≠ 0 : le membre paie montant + frais ──────────────────
+  // ─── resteAAtteindre ──────────────────────────────────────────────────────
+
+  it('resteAAtteindre = 0 quand montant >= objectif', async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({ id: 1, montant: 15000, objectifMontant: 10000 }),
+    );
+    const vue = await service.findOne(1, 1);
+    expect(vue.apercu.resteAAtteindre).toBe(0);
+  });
+
+  it('resteAAtteindre = objectif - montant quand montant < objectif', async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({ id: 1, montant: 3000, objectifMontant: 10000 }),
+    );
+    const vue = await service.findOne(1, 1);
+    expect(vue.apercu.resteAAtteindre).toBe(7000);
+  });
+
+  // ─── Frais FedaPay ≠ 0 ───────────────────────────────────────────────────
 
   it('avec frais 2 % : transaction montant = 5100, epargne.id liée, fraisFedapay = 100', async () => {
-    // pourcentage_frais_fedapay = 2 % → frais = ceil(5000 * 2 / 100) = 100
     parametresMock.getNumber.mockImplementation((cle: string) => {
       const vals: Record<string, number> = {
         epargne_minimale: 1,
@@ -294,22 +434,19 @@ describe('EpargneService', () => {
       return Promise.resolve(vals[cle] ?? 0);
     });
 
-    const { transaction, urlPaiement } = await service.creer(1, {
+    const { transaction } = await service.creer(1, {
       montantInitial: 5000,
-      dateEcheance: '2099-12-31',
+      nom: 'Test frais',
+      objectifMontant: 10000,
     });
-    // Le membre paie montant + frais.
     expect(transaction.montant).toBe(5100);
-    // Les frais estimés sont mémorisés sur la transaction.
     expect(transaction.fraisFedapay).toBe(100);
-    // La transaction est bien liée à l'épargne créée.
     expect(transaction.epargne).toMatchObject({ id: 1 });
-    expect(urlPaiement).toContain('fedapay.com');
   });
 
-  // ─── Anti double-clic POST /epargnes/:id/depots ───────────────────────────
+  // ─── Anti double-clic dépôt additionnel ──────────────────────────────────
 
-  it('anti double-clic dépôt additionnel : renvoie la transaction existante (< 10 min)', async () => {
+  it('anti double-clic dépôt additionnel : renvoie la transaction existante', async () => {
     epargneRepoMock.findOne.mockResolvedValue(
       fabriqueEpargne({ id: 5, montant: 3000, statut: StatutEpargne.ACTIVE }),
     );
@@ -327,8 +464,170 @@ describe('EpargneService', () => {
     });
     expect(transaction.id).toBe(88);
     expect(urlPaiement).toBeNull();
-    // Aucune nouvelle transaction créée.
     expect(txRepoMock.create).not.toHaveBeenCalled();
+  });
+
+  // ─── progressionPourcent ─────────────────────────────────────────────────
+
+  it('progression 0 % (montant 0, objectif 10000)', async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({ id: 1, montant: 0, objectifMontant: 10000 }),
+    );
+    const vue = await service.findOne(1, 1);
+    expect(vue.progressionPourcent).toBe(0);
+  });
+
+  it('progression 50 % (montant 5000, objectif 10000)', async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({ id: 1, montant: 5000, objectifMontant: 10000 }),
+    );
+    const vue = await service.findOne(1, 1);
+    expect(vue.progressionPourcent).toBe(50);
+  });
+
+  it('progression 100 % (montant 10000, objectif 10000)', async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({ id: 1, montant: 10000, objectifMontant: 10000 }),
+    );
+    const vue = await service.findOne(1, 1);
+    expect(vue.progressionPourcent).toBe(100);
+  });
+
+  it('progression plafonnée à 100 % (montant 15000, objectif 10000)', async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({ id: 1, montant: 15000, objectifMontant: 10000 }),
+    );
+    const vue = await service.findOne(1, 1);
+    expect(vue.progressionPourcent).toBe(100);
+  });
+
+  it("progression arrondie à l'inférieur (montant 7501, objectif 10000 → 75 %)", async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({ id: 1, montant: 7501, objectifMontant: 10000 }),
+    );
+    const vue = await service.findOne(1, 1);
+    expect(vue.progressionPourcent).toBe(75);
+  });
+
+  // ─── PATCH /epargnes/:id ───────────────────────────────────────────────────
+
+  it('PATCH : modifier le nom avant tout dépôt → OK', async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({
+        id: 1,
+        montant: 0,
+        statut: StatutEpargne.ACTIVE,
+        nom: 'Ancien nom',
+        objectifMontant: 10000,
+        objectifAtteintLe: null,
+      }),
+    );
+    epargneRepoMock.save.mockImplementation(async (e: Epargne) => e);
+
+    const vue = await service.modifier(1, 1, { nom: 'Nouveau nom' });
+    expect(vue.nom).toBe('Nouveau nom');
+    expect(vue.objectifMontant).toBe(10000);
+  });
+
+  it("PATCH : modifier l'objectif avant tout dépôt (montant 0) → OK", async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({
+        id: 1,
+        montant: 0,
+        statut: StatutEpargne.ACTIVE,
+        nom: 'Mon projet',
+        objectifMontant: 10000,
+        objectifAtteintLe: null,
+      }),
+    );
+    epargneRepoMock.save.mockImplementation(async (e: Epargne) => e);
+
+    const vue = await service.modifier(1, 1, { objectifMontant: 20000 });
+    expect(vue.objectifMontant).toBe(20000);
+  });
+
+  it("PATCH : modifier l'objectif après un dépôt réussi (montant > 0) → 409", async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({
+        id: 1,
+        montant: 3000, // dépôt réussi
+        statut: StatutEpargne.ACTIVE,
+        nom: 'Mon projet',
+        objectifMontant: 10000,
+        objectifAtteintLe: null,
+      }),
+    );
+    await expect(
+      service.modifier(1, 1, { objectifMontant: 20000 }),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it("PATCH : modifier l'objectif après que l'objectif a été atteint (objectifAtteintLe non null) → 409", async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({
+        id: 1,
+        montant: 0, // montant retombé à 0 mais objectifAtteintLe est renseigné
+        statut: StatutEpargne.ACTIVE,
+        nom: 'Mon projet',
+        objectifMontant: 10000,
+        objectifAtteintLe: new Date('2026-01-01'),
+      }),
+    );
+    await expect(
+      service.modifier(1, 1, { objectifMontant: 20000 }),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it('PATCH : modifier uniquement le nom est toujours possible après un dépôt', async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({
+        id: 1,
+        montant: 3000, // dépôt réussi
+        statut: StatutEpargne.ACTIVE,
+        nom: 'Mon projet',
+        objectifMontant: 10000,
+      }),
+    );
+    epargneRepoMock.save.mockImplementation(async (e: Epargne) => e);
+
+    const vue = await service.modifier(1, 1, { nom: 'Nouveau nom' });
+    expect(vue.nom).toBe('Nouveau nom');
+    expect(vue.objectifMontant).toBe(10000); // inchangé
+  });
+
+  it("PATCH sur une épargne d'un autre membre → 404", async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({ id: 1, membre: fabriqueMembre({ id: 2 }) }),
+    );
+    await expect(service.modifier(1, 1, { nom: 'Hack' })).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('PATCH sur une épargne retirée → 409', async () => {
+    epargneRepoMock.findOne.mockResolvedValue(
+      fabriqueEpargne({
+        id: 1,
+        statut: StatutEpargne.RETIREE,
+        membre: fabriqueMembre({ id: 1 }),
+      }),
+    );
+    await expect(service.modifier(1, 1, { nom: 'Test' })).rejects.toThrow(
+      ConflictException,
+    );
+  });
+
+  // ─── Nom court refusé par le DTO ──────────────────────────────────────────
+
+  it('nom trop court (< 2) refusé par le DTO', () => {
+    const dto = plainToClass(CreateEpargneDto, {
+      montantInitial: 5000,
+      nom: 'A',
+      objectifMontant: 10000,
+    });
+    const errors = validateSync(dto);
+    const nomErrors = errors.filter((e) => e.property === 'nom');
+    expect(nomErrors.length).toBeGreaterThan(0);
   });
 });
 
@@ -376,8 +675,10 @@ describe('TransactionService.confirmerDepotEpargne', () => {
       epargne: {
         id: 1,
         montant: 0,
-        dateEcheance: '2099-12-31',
+        dateEcheance: null,
         statut: StatutEpargne.ACTIVE,
+        objectifMontant: 10000,
+        objectifAtteintLe: null,
       } as Epargne,
       ...overrides,
     });
@@ -436,17 +737,21 @@ describe('TransactionService.confirmerDepotEpargne', () => {
       }),
       createQueryBuilder: jest.fn().mockReturnValue(recalculQb),
     };
+    // Épargne de départ : montant 0, objectif 10000, pas encore atteint.
+    const epargneDepart: Epargne = Object.assign(new Epargne(), {
+      id: 1,
+      montant: 0,
+      dateEcheance: null,
+      statut: StatutEpargne.ACTIVE,
+      objectifMontant: 10000,
+      objectifAtteintLe: null,
+    });
     const epargneRepoMock = {
-      findOne: jest.fn().mockResolvedValue(
-        Object.assign(new Epargne(), {
-          id: 1,
-          montant: 0, // démarre à 0 (aucun dépôt encore confirmé)
-          dateEcheance: '2099-12-31',
-          statut: StatutEpargne.ACTIVE,
-        }),
-      ),
+      findOne: jest.fn().mockResolvedValue(epargneDepart),
       save: jest.fn().mockImplementation(async (e: Epargne) => {
-        epargnesMaj.push(e);
+        // Mettre à jour l'épargne de départ en mémoire pour les prochains appels.
+        Object.assign(epargneDepart, e);
+        epargnesMaj.push({ ...e } as Epargne);
         return e;
       }),
     };
@@ -475,6 +780,7 @@ describe('TransactionService.confirmerDepotEpargne', () => {
       _ecritures: ecritures,
       _epargnesMaj: epargnesMaj,
       _portefeuilleMaj: portefeuilleMaj,
+      _epargneDepart: epargneDepart,
     };
   }
 
@@ -487,15 +793,13 @@ describe('TransactionService.confirmerDepotEpargne', () => {
     );
     const ecr = manager._ecritures.find((e) => e.type === TypeEcriture.EPARGNE);
     expect(ecr).toBeDefined();
-    // montant épargné = total payé (5000) - frais (0) = 5000.
     expect(ecr!.montant).toBe(5000);
     expect(ecr!.sens).toBe(SensEcriture.CREDIT);
-    expect(ecr!.cycle).toBeNull(); // aucune écriture d'épargne dans un cycle
-    // Epargne.montant augmenté de 5000.
+    expect(ecr!.cycle).toBeNull();
     expect(manager._epargnesMaj[0].montant).toBe(5000);
   });
 
-  it('portefeuille recalculé : soldeEpargne = montant du dépôt, retirable inchangé', async () => {
+  it('portefeuille recalculé : soldeEpargne = montant du dépôt', async () => {
     const tx = fabriqueTransaction({ montant: 5000 });
     const manager = fabriqueManager(tx);
     await transactionService.confirmer(
@@ -505,6 +809,88 @@ describe('TransactionService.confirmerDepotEpargne', () => {
     expect(manager._portefeuilleMaj).toHaveLength(1);
     expect(manager._portefeuilleMaj[0].soldeEpargne).toBe(5000);
     expect(manager._portefeuilleMaj[0].soldeCotisation).toBe(0);
+  });
+
+  it("objectifAtteintLe renseigné quand montant atteint exactement l'objectif", async () => {
+    // dépôt de 10000 sur une épargne à 0, objectif = 10000.
+    const tx = fabriqueTransaction({ montant: 10000, fraisFedapay: 0 });
+    const manager = fabriqueManager(tx);
+    await transactionService.confirmer(
+      1,
+      manager as unknown as Parameters<typeof transactionService.confirmer>[1],
+    );
+    const epargneMaj = manager._epargnesMaj[0];
+    expect(epargneMaj.montant).toBe(10000);
+    expect(epargneMaj.objectifAtteintLe).toBeInstanceOf(Date);
+  });
+
+  it("objectifAtteintLe renseigné quand montant dépasse l'objectif", async () => {
+    const tx = fabriqueTransaction({ montant: 15000, fraisFedapay: 0 });
+    // Épargne départ : objectif 10000.
+    const manager = fabriqueManager(tx);
+    await transactionService.confirmer(
+      1,
+      manager as unknown as Parameters<typeof transactionService.confirmer>[1],
+    );
+    expect(manager._epargnesMaj[0].objectifAtteintLe).toBeInstanceOf(Date);
+  });
+
+  it('objectifAtteintLe non renseigné si montant < objectif', async () => {
+    // dépôt de 5000, objectif 10000.
+    const tx = fabriqueTransaction({ montant: 5000, fraisFedapay: 0 });
+    const manager = fabriqueManager(tx);
+    await transactionService.confirmer(
+      1,
+      manager as unknown as Parameters<typeof transactionService.confirmer>[1],
+    );
+    expect(manager._epargnesMaj[0].objectifAtteintLe).toBeNull();
+  });
+
+  it('objectifAtteintLe déjà renseigné : ne pas le réécrire au dépôt suivant', async () => {
+    // L'objectif a déjà été atteint lors d'un dépôt précédent.
+    const dateDejaAtteinte = new Date('2026-01-01T12:00:00Z');
+    const tx = fabriqueTransaction({ montant: 5000, fraisFedapay: 0 });
+    const manager = fabriqueManager(tx);
+    // Pré-renseigner objectifAtteintLe sur l'épargne de départ.
+    manager._epargneDepart.objectifAtteintLe = dateDejaAtteinte;
+    manager._epargneDepart.montant = 8000; // déjà au-dessus de la moitié
+
+    // Reconfigurer le mock findOne pour renvoyer cet état.
+    (
+      manager.getRepository({ name: 'Epargne' } as never) as {
+        findOne: jest.Mock;
+      }
+    ).findOne.mockResolvedValue({ ...manager._epargneDepart });
+
+    await transactionService.confirmer(
+      1,
+      manager as unknown as Parameters<typeof transactionService.confirmer>[1],
+    );
+    // objectifAtteintLe ne doit pas avoir changé.
+    expect(manager._epargnesMaj[0].objectifAtteintLe).toEqual(dateDejaAtteinte);
+  });
+
+  it('objectifAtteintLe reste acquis après un retrait partiel : le dépôt suivant ne le réinitialise pas', async () => {
+    // Scénario : objectif atteint, puis retrait partiel ramène le montant sous
+    // l'objectif, puis nouveau dépôt → objectifAtteintLe doit rester acquis.
+    const dateAtteinte = new Date('2026-03-01T10:00:00Z');
+    const tx = fabriqueTransaction({ montant: 2000, fraisFedapay: 0 });
+    const manager = fabriqueManager(tx);
+    // Épargne après retrait partiel : montant 3000, objectifAtteintLe déjà renseigné.
+    manager._epargneDepart.montant = 3000;
+    manager._epargneDepart.objectifAtteintLe = dateAtteinte;
+    (
+      manager.getRepository({ name: 'Epargne' } as never) as {
+        findOne: jest.Mock;
+      }
+    ).findOne.mockResolvedValue({ ...manager._epargneDepart });
+
+    await transactionService.confirmer(
+      1,
+      manager as unknown as Parameters<typeof transactionService.confirmer>[1],
+    );
+    expect(manager._epargnesMaj[0].objectifAtteintLe).toEqual(dateAtteinte);
+    expect(manager._epargnesMaj[0].montant).toBe(5000); // 3000 + 2000
   });
 
   it('échec (echouer) : aucune écriture créée', async () => {
@@ -517,15 +903,10 @@ describe('TransactionService.confirmerDepotEpargne', () => {
     expect(manager._ecritures).toHaveLength(0);
   });
 
-  // ─── Frais FedaPay ≠ 0 : l'épargne reçoit EXACTEMENT le montant demandé ──
+  // ─── Frais FedaPay ≠ 0 ───────────────────────────────────────────────────
 
-  it('frais réels FedaPay ≠ frais estimés : épargne crédite le montant demandé (fraisEstimés), pas montant−fraisRéels', async () => {
-    // Membre a demandé 5000, frais estimés = 100, total payé = 5100.
-    // FedaPay renvoie finalement des frais réels = 150 (différent de 100).
-    // L'épargne doit recevoir EXACTEMENT 5000 (= 5100 − 100 estimés),
-    // et non 4950 (= 5100 − 150 réels).
+  it('frais réels FedaPay ≠ frais estimés : épargne crédite le montant estimé', async () => {
     const tx = fabriqueTransaction({ montant: 5100, fraisFedapay: 100 });
-    // FedaPay simulé renvoie 150 de frais réels.
     fedapayFaux.definirFees(150);
     const manager = fabriqueManager(tx);
     await transactionService.confirmer(
@@ -533,14 +914,11 @@ describe('TransactionService.confirmerDepotEpargne', () => {
       manager as unknown as Parameters<typeof transactionService.confirmer>[1],
     );
     const ecr = manager._ecritures.find((e) => e.type === TypeEcriture.EPARGNE);
-    expect(ecr).toBeDefined();
-    // 5100 − 100 (frais estimés) = 5000, pas 5100 − 150 = 4950.
-    expect(ecr!.montant).toBe(5000);
+    expect(ecr!.montant).toBe(5000); // 5100 - 100 estimés
     expect(manager._epargnesMaj[0].montant).toBe(5000);
   });
 
   it('frais estimés = frais réels : résultat identique au cas sans frais', async () => {
-    // fraisEstimés = fraisRéels = 200 → montant épargné = 5200 − 200 = 5000.
     const tx = fabriqueTransaction({ montant: 5200, fraisFedapay: 200 });
     fedapayFaux.definirFees(200);
     const manager = fabriqueManager(tx);
@@ -553,13 +931,9 @@ describe('TransactionService.confirmerDepotEpargne', () => {
     expect(manager._epargnesMaj[0].montant).toBe(5000);
   });
 
-  // ─── Point 5 : une transaction RETRAIT avec epargne_id ne passe jamais ────
-  //              par confirmerDepot() (logique cotisation).
+  // ─── RETRAIT + epargne_id → confirmerRetraitEpargne ──────────────────────
 
   it("transaction RETRAIT liée à une épargne : confirmer() n'écrit pas d'écriture COTISATION", async () => {
-    // Fabriquer une transaction de type RETRAIT avec epargne non null.
-    // confirmer() doit aiguiller vers confirmerRetraitEpargne(), pas confirmerDepot().
-    // On le prouve en vérifiant qu'aucune écriture COTISATION n'est créée.
     const txRetrait = fabriqueTransaction({
       type: TypeTransaction.RETRAIT,
       montant: 9500,
@@ -567,12 +941,13 @@ describe('TransactionService.confirmerDepotEpargne', () => {
       epargne: {
         id: 1,
         montant: 10000,
-        dateEcheance: '2099-12-31',
+        dateEcheance: null,
         statut: StatutEpargne.ACTIVE,
+        objectifMontant: 10000,
+        objectifAtteintLe: null,
       } as Epargne,
     });
     const manager = fabriqueManager(txRetrait);
-    // Ajouter CaisseApplication et RetraitEpargne au manager (nécessaires pour confirmerRetraitEpargne).
     const caisses: unknown[] = [];
     const caisseRepoMock = {
       create: jest.fn().mockImplementation((v: unknown) => v),
@@ -585,12 +960,11 @@ describe('TransactionService.confirmerDepotEpargne', () => {
     manager.getRepository = jest.fn().mockImplementation((entity: unknown) => {
       const name = (entity as { name?: string }).name ?? String(entity);
       if (name === 'CaisseApplication') return caisseRepoMock;
-      return originalGetRepo(entity as never);
+      return originalGetRepo(entity);
     });
-    // Ajouter le retraitEpargne sur la transaction (lu via findOne dans confirmer).
     const txRepoInternal = manager.getRepository({
       name: 'Transaction',
-    } as never) as { findOne: jest.Mock };
+    }) as { findOne: jest.Mock };
     txRepoInternal.findOne.mockResolvedValue({
       ...txRetrait,
       retraitEpargne: {
@@ -605,35 +979,29 @@ describe('TransactionService.confirmerDepotEpargne', () => {
       1,
       manager as unknown as Parameters<typeof transactionService.confirmer>[1],
     );
-    // Aucune écriture de type COTISATION ne doit avoir été créée.
-    const cotisations = manager._ecritures.filter(
-      (e) => e.type === TypeEcriture.COTISATION,
-    );
-    expect(cotisations).toHaveLength(0);
-    // Une écriture RETRAIT_EPARGNE doit exister.
-    const retraitEcr = manager._ecritures.find(
-      (e) => e.type === TypeEcriture.RETRAIT_EPARGNE,
-    );
-    expect(retraitEcr).toBeDefined();
+    expect(
+      manager._ecritures.some((e) => e.type === TypeEcriture.COTISATION),
+    ).toBe(false);
+    expect(
+      manager._ecritures.some((e) => e.type === TypeEcriture.RETRAIT_EPARGNE),
+    ).toBe(true);
   });
 
-  // ─── Idempotence : deux confirmations séquentielles ───────────────────────
+  // ─── Idempotence ──────────────────────────────────────────────────────────
 
   it('idempotence — dépôt épargne : confirmer() deux fois en séquence → aucune écriture supplémentaire', async () => {
     const tx = fabriqueTransaction({ montant: 5000, fraisFedapay: 0 });
     const manager = fabriqueManager(tx);
 
-    // Première confirmation.
     await transactionService.confirmer(
       1,
       manager as unknown as Parameters<typeof transactionService.confirmer>[1],
     );
-    const nbEcr1 = manager._ecritures.length; // 1 (EPARGNE crédit)
-    const nbEpargne1 = manager._epargnesMaj.length; // 1
-    const nbPortefeuille1 = manager._portefeuilleMaj.length; // 1
+    const nbEcr1 = manager._ecritures.length;
+    const nbEpargne1 = manager._epargnesMaj.length;
+    const nbPortefeuille1 = manager._portefeuilleMaj.length;
     const soldeEpargne1 = manager._portefeuilleMaj[0]?.soldeEpargne;
 
-    // Simuler que la transaction est maintenant REUSSI.
     const txRepoInternal = (
       manager.getRepository as (e: { name: string }) => { findOne: jest.Mock }
     )({ name: 'Transaction' });
@@ -642,25 +1010,20 @@ describe('TransactionService.confirmerDepotEpargne', () => {
       statut: StatutTransaction.REUSSI,
     });
 
-    // Deuxième confirmation.
     await transactionService.confirmer(
       1,
       manager as unknown as Parameters<typeof transactionService.confirmer>[1],
     );
 
-    // Aucun effet supplémentaire.
     expect(manager._ecritures.length).toBe(nbEcr1);
     expect(manager._epargnesMaj.length).toBe(nbEpargne1);
     expect(manager._portefeuilleMaj.length).toBe(nbPortefeuille1);
     expect(manager._portefeuilleMaj[0].soldeEpargne).toBe(soldeEpargne1);
   });
 
-  // ─── Idempotence : deux confirmations parallèles ─────────────────────────
-
   it('idempotence — dépôt épargne : deux confirmations parallèles → seul manager EN_ATTENTE crée des écritures', async () => {
     const tx = fabriqueTransaction({ montant: 5000, fraisFedapay: 0 });
 
-    // manager A voit tx EN_ATTENTE, manager B voit tx déjà REUSSI.
     const managerA = fabriqueManager(tx);
     const managerB = fabriqueManager({
       ...tx,
@@ -685,13 +1048,11 @@ describe('TransactionService.confirmerDepotEpargne', () => {
     expect(rA.status).toBe('fulfilled');
     expect(rB.status).toBe('fulfilled');
 
-    // managerA : 1 écriture EPARGNE, epargne.montant = 5000, soldeEpargne = 5000.
     expect(managerA._ecritures).toHaveLength(1);
     expect(managerA._ecritures[0].type).toBe(TypeEcriture.EPARGNE);
     expect(managerA._epargnesMaj[0].montant).toBe(5000);
     expect(managerA._portefeuilleMaj[0].soldeEpargne).toBe(5000);
 
-    // managerB : aucun effet.
     expect(managerB._ecritures).toHaveLength(0);
     expect(managerB._epargnesMaj).toHaveLength(0);
     expect(managerB._portefeuilleMaj).toHaveLength(0);
@@ -699,9 +1060,6 @@ describe('TransactionService.confirmerDepotEpargne', () => {
 });
 
 // ─── WebhookFedapayService : cas spéciaux ─────────────────────────────────────
-// Tests du comportement de traiterEvenement() sur des payloads sans transaction
-// interne correspondante. On teste la logique via traiterDirectement() qui suit
-// le même chemin de confirmation.
 
 describe('WebhookFedapayService : idFedapay inconnu → ignoré, retourne 200', () => {
   let webhookService: WebhookFedapayService;
@@ -731,7 +1089,7 @@ describe('WebhookFedapayService : idFedapay inconnu → ignoré, retourne 200', 
         {
           provide: `${Transaction.name}Repository`,
           useValue: {
-            findOne: jest.fn().mockResolvedValue(null), // aucune transaction correspondante
+            findOne: jest.fn().mockResolvedValue(null),
             find: jest.fn().mockResolvedValue([]),
             save: jest.fn().mockResolvedValue({}),
             manager: {
@@ -759,28 +1117,15 @@ describe('WebhookFedapayService : idFedapay inconnu → ignoré, retourne 200', 
     webhookService = module.get<WebhookFedapayService>(WebhookFedapayService);
   });
 
-  it('transaction inconnue (idFedapay non trouvé) → retourne { recu: true } sans exception', async () => {
-    // traiterDirectement() lève une NotFoundException si la transaction est introuvable.
-    // C'est le comportement voulu : le webhook handler retourne quand même 200,
-    // donc le service ne doit pas propager l'exception à l'appelant.
-    // Ici on vérifie directement que NotFoundException est levée par traiterDirectement(),
-    // ce qui simule le comportement de traiterEvenement() (qui absorbe l'erreur et retourne
-    // { recu: true }). La couverture de l'absorption se fait via l'intégration complète.
-    // TODO(verifier) : ajouter un test d'intégration pour vérifier que le handler HTTP
-    //   retourne bien 200 même quand la transaction interne est introuvable.
+  it('transaction inconnue (idFedapay non trouvé) → NotFoundException par traiterDirectement()', async () => {
+    // TODO(verifier) : ajouter un test d'intégration pour vérifier que le handler
+    //   HTTP retourne bien 200 même quand la transaction interne est introuvable.
     await expect(
       webhookService.traiterDirectement(9999, 'approuve'),
     ).rejects.toThrow(NotFoundException);
-    // La réponse HTTP est toujours 200 car le controller absorbe l'exception
-    // dans traiter() via le try/catch autour de traiterEvenement().
   });
 
   it('idFedapay non trouvé dans traiterEvenement : aucune transaction modifiée', async () => {
-    // On vérifie que lorsque idFedapayRef pointe vers un idFedapay inconnu,
-    // le webhook est marqué traité (true) et aucune confirmation n'est appelée.
-    // On accède directement au résultat de traiter() pour observer { recu: true }.
-    // La vérification de signature est bypassée en appelant la méthode publique
-    // avec un mock de verifierSignatureWebhook.
     jest.spyOn(fedapayFaux, 'verifierSignatureWebhook').mockReturnValue({
       name: 'transaction.approved',
       object: {},

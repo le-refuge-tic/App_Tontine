@@ -4,6 +4,7 @@ import {
   cycles,
   depots,
   ecritures,
+  epargnes,
   notifications,
   retraits,
   souscriptions,
@@ -24,6 +25,8 @@ export const clesRequetes = {
   notifications: ["notifications"] as const,
   rapport: (mois: string, type: string) => ["rapport", mois, type] as const,
   transaction: (id: number) => ["transaction", id] as const,
+  epargnes: ["epargnes"] as const,
+  epargne: (id: number) => ["epargnes", id] as const,
 };
 
 // ── Lecture ────────────────────────────────────────────────────────────────
@@ -118,6 +121,7 @@ export function useInvaliderDonnees() {
     void qc.invalidateQueries({ queryKey: clesRequetes.ecritures });
     void qc.invalidateQueries({ queryKey: clesRequetes.souscriptionActive });
     void qc.invalidateQueries({ queryKey: ["rapport"] });
+    void qc.invalidateQueries({ queryKey: clesRequetes.epargnes });
   };
 }
 
@@ -175,6 +179,61 @@ export function useDemanderRetrait() {
   return useMutation({
     mutationFn: (params: { montant?: number; total?: boolean; jetonRetrait: string }) =>
       retraits.demanderRetrait(params),
+    onSuccess: () => invalider(),
+  });
+}
+
+// ── Hooks épargne / projet ─────────────────────────────────────────────────
+
+export function useEpargnes() {
+  const { estAuthentifie } = useAuth();
+  return useQuery({
+    queryKey: clesRequetes.epargnes,
+    queryFn: () => epargnes.listerEpargnes(),
+    enabled: estAuthentifie,
+  });
+}
+
+export function useEpargne(id: number | null) {
+  const { estAuthentifie } = useAuth();
+  return useQuery({
+    queryKey: clesRequetes.epargne(id ?? 0),
+    queryFn: () => epargnes.obtenirEpargne(id!),
+    enabled: estAuthentifie && id !== null,
+  });
+}
+
+export function useCreerEpargne() {
+  const invalider = useInvaliderDonnees();
+  return useMutation({
+    mutationFn: (params: {
+      nom: string;
+      montantInitial: number;
+      objectifMontant: number;
+    }) => epargnes.creerEpargne(params),
+    onSuccess: () => invalider(),
+  });
+}
+
+export function useAjouterDepotEpargne() {
+  const invalider = useInvaliderDonnees();
+  return useMutation({
+    mutationFn: ({ id, montant }: { id: number; montant: number }) =>
+      epargnes.ajouterDepotEpargne(id, montant),
+    onSuccess: () => invalider(),
+  });
+}
+
+export function useModifierEpargne() {
+  const invalider = useInvaliderDonnees();
+  return useMutation({
+    mutationFn: ({
+      id,
+      params,
+    }: {
+      id: number;
+      params: { nom?: string; objectifMontant?: number };
+    }) => epargnes.modifierEpargne(id, params),
     onSuccess: () => invalider(),
   });
 }

@@ -1,13 +1,15 @@
 import { useCallback, useRef, useState } from "react";
-import { RefreshControl, StyleSheet, Text, View } from "react-native";
+import { Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import * as WebBrowser from "expo-web-browser";
+import type { UseQueryResult } from "@tanstack/react-query";
 import { Ecran } from "@/components/Ecran";
 import { Carte } from "@/components/Carte";
 import { CarnetDuMois } from "@/components/CarnetDuMois";
 import { Bouton } from "@/components/Bouton";
 import { Icone } from "@/components/Icone";
 import { EtatErreur } from "@/components/EtatErreur";
+import { EtatVide } from "@/components/EtatVide";
 import { Squelette } from "@/components/Squelette";
 import { useToast } from "@/components/Toast";
 import { theme } from "@/theme";
@@ -17,17 +19,37 @@ import {
   POLLING_TRANSACTION_INTERVAL_MS,
   POLLING_TRANSACTION_DUREE_MAX_MS,
 } from "@/constants/app";
-import { useCycleEnCours, useLancerDepot, useInvaliderDonnees } from "@/hooks/useRequetes";
+import {
+  LIB_JOURS_A_RATTRAPER,
+  LIB_AUCUN_JOUR_A_RATTRAPER,
+  LIB_JOURS_SELECTIONNES,
+  LIB_TOTAL_RATTRAPAGE,
+  LIB_PERDU_RATTRAPABLE,
+  LIB_RATTRAPER_SELECTION,
+} from "@/constants/libelles";
+import {
+  useCycleEnCours,
+  useJoursRattrapables,
+  useLancerDepot,
+  useInvaliderDonnees,
+} from "@/hooks/useRequetes";
 import { transactions, ErreurApi } from "@/api";
 import { formaterFCFA } from "@/utils/formaterFCFA";
-import { dateJourBeninISO } from "@/utils/dates";
+import { dateJourBeninISO, formaterDateCourte } from "@/utils/dates";
 import { hapticSucces, hapticErreur } from "@/utils/haptics";
-import type { Transaction } from "@/api/types";
+import type { JourRattrapable, Transaction } from "@/api/types";
 
-type EtatPaiement = "selection" | "attente_paiement" | "attente_confirmation" | "succes" | "echec" | "timeout";
+type EtatPaiement =
+  | "selection"
+  | "attente_paiement"
+  | "attente_confirmation"
+  | "succes"
+  | "echec"
+  | "timeout";
 
 export default function Cotiser() {
   const cycle = useCycleEnCours();
+  const joursRattrapablesQuery = useJoursRattrapables();
   const lancerDepot = useLancerDepot();
   const invalider = useInvaliderDonnees();
   const { afficher } = useToast();
@@ -45,10 +67,14 @@ export default function Cotiser() {
   const jourDuJour = jours.find((j) => j.datePrevue === aujourdhui);
   const montantJour = jourDuJour?.montantDu ?? cycle.data?.miseBase ?? 0;
 
-  // Total indicatif des jours sélectionnés (affichage uniquement).
-  const totalSelectionne = jours
-    .filter((j) => joursSelectionnes.includes(j.id))
-    .reduce((s, j) => s + j.montantDu, 0);
+  // Total indicatif des jours sélectionnés (affichage uniquement,
+  // le vrai total vient du serveur au moment du POST /depots).
+  const totalSelectionne = [
+    ...jours.filter((j) => joursSelectionnes.includes(j.id)),
+    ...(joursRattrapablesQuery.data ?? []).filter((j) =>
+      joursSelectionnes.includes(j.id),
+    ),
+  ].reduce((s, j) => s + j.montantDu, 0);
 
   const toggleJour = (id: number) =>
     setJoursSelectionnes((prev) =>
@@ -93,14 +119,14 @@ export default function Cotiser() {
     if (enCoursRef.current) return;
     enCoursRef.current = true;
     try {
-      // Sans sélection manuelle : envoyer un tableau vide — le backend
-      // choisit lui-même le jour a_payer d'aujourd'hui.
+      // Sans sélection manuelle : tableau vide → le backend choisit le jour
+      // a_payer d'aujourd'hui. Avec sélection : rattrapage des jours fournis.
       const idsAPayer = joursSelectionnes.length > 0 ? joursSelectionnes : [];
 
       const res = await lancerDepot.mutateAsync(idsAPayer);
       setTransactionEnCours(res.transaction);
 
-      // Si la transaction est déjà réussie (démo ou double-clic).
+      // Si la transaction est déjà réussie (démo ou anti-double-clic).
       if (res.transaction.statut === "reussi") {
         setEtatPaiement("succes");
         hapticSucces();
@@ -117,7 +143,12 @@ export default function Cotiser() {
       setEtatPaiement("attente_confirmation");
       await pollStatut(res.transaction.id);
     } catch (e) {
-      const msg = e instanceof ErreurApi ? e.message : (e instanceof Error ? e.message : String(e));
+      const msg =
+        e instanceof ErreurApi
+          ? e.message
+          : e instanceof Error
+            ? e.message
+            : String(e);
       console.error("[COTISER] Erreur payer():", msg, e);
       setMessageEchec(msg);
       setEtatPaiement("echec");
@@ -136,7 +167,7 @@ export default function Cotiser() {
 
   const rafraichir = async () => {
     setRafraichit(true);
-    await cycle.refetch();
+    await Promise.all([cycle.refetch(), joursRattrapablesQuery.refetch()]);
     setRafraichit(false);
     setJoursSelectionnes([]);
     setEtatPaiement("selection");
@@ -156,10 +187,20 @@ export default function Cotiser() {
       <Ecran defilement={false}>
         <View style={styles.centré}>
           <Icone nom="hourglass-outline" taille={56} couleur={theme.couleurs.or} />
-          <Text style={[theme.typographie.titre2, { color: theme.couleurs.textePrimaire, textAlign: "center" }]}>
+          <Text
+            style={[
+              theme.typographie.titre2,
+              { color: theme.couleurs.textePrimaire, textAlign: "center" },
+            ]}
+          >
             Paiement en attente de confirmation
           </Text>
-          <Text style={[theme.typographie.corps2, { color: theme.couleurs.texteSecondaire, textAlign: "center" }]}>
+          <Text
+            style={[
+              theme.typographie.corps2,
+              { color: theme.couleurs.texteSecondaire, textAlign: "center" },
+            ]}
+          >
             Votre opérateur n'a pas encore confirmé le paiement. Réessayez dans quelques instants.
           </Text>
           <Bouton
@@ -171,7 +212,10 @@ export default function Cotiser() {
           <Bouton
             libelle="Retour"
             variante="secondaire"
-            onPress={() => { setEtatPaiement("selection"); setJoursSelectionnes([]); }}
+            onPress={() => {
+              setEtatPaiement("selection");
+              setJoursSelectionnes([]);
+            }}
           />
         </View>
       </Ecran>
@@ -182,7 +226,10 @@ export default function Cotiser() {
     return (
       <EcranSucces
         transaction={transactionEnCours}
-        onTerminer={() => { setEtatPaiement("selection"); setJoursSelectionnes([]); }}
+        onTerminer={() => {
+          setEtatPaiement("selection");
+          setJoursSelectionnes([]);
+        }}
       />
     );
   }
@@ -204,12 +251,17 @@ export default function Cotiser() {
 
   return (
     <Ecran defilement paddingBas={96}>
-      <RefreshControl refreshing={rafraichit} onRefresh={rafraichir} tintColor={theme.couleurs.primaire} />
+      <RefreshControl
+        refreshing={rafraichit}
+        onRefresh={rafraichir}
+        tintColor={theme.couleurs.primaire}
+      />
       <View style={styles.contenu}>
-
         {/* Montant du jour */}
         <Carte style={styles.carteMontant}>
-          <Text style={[theme.typographie.corps2, { color: theme.couleurs.texteSecondaire }]}>Montant du jour</Text>
+          <Text style={[theme.typographie.corps2, { color: theme.couleurs.texteSecondaire }]}>
+            Montant du jour
+          </Text>
           <Text style={[theme.typographie.montantGrand, { color: theme.couleurs.textePrimaire }]}>
             {formaterFCFA(montantJour)}
           </Text>
@@ -217,9 +269,16 @@ export default function Cotiser() {
 
         {/* Carnet en mode sélection */}
         {cycle.isPending ? (
-          <Carte><Squelette width="100%" height={170} rayon={16} /></Carte>
+          <Carte>
+            <Squelette width="100%" height={170} rayon={16} />
+          </Carte>
         ) : cycle.isError ? (
-          <Carte><EtatErreur message="Impossible de charger le carnet." onReessayer={() => cycle.refetch()} /></Carte>
+          <Carte>
+            <EtatErreur
+              message="Impossible de charger le carnet."
+              onReessayer={() => cycle.refetch()}
+            />
+          </Carte>
         ) : cycle.data && cycle.data.jours.length > 0 ? (
           <Animated.View entering={FadeIn.duration(300)}>
             <Carte>
@@ -238,16 +297,31 @@ export default function Cotiser() {
           </Animated.View>
         ) : null}
 
+        {/* Section jours à rattraper (cycles précédents) */}
+        <SectionJoursRattrapables
+          query={joursRattrapablesQuery}
+          joursSelectionnes={joursSelectionnes}
+          onToggleJour={toggleJour}
+        />
+
         {/* Récapitulatif des jours sélectionnés */}
         {joursSelectionnes.length > 0 ? (
           <Carte style={styles.recap}>
             <View style={styles.recapLigne}>
-              <Text style={[theme.typographie.corps2Medium, styles.recapLibelle]}>Jours sélectionnés</Text>
-              <Text style={[theme.typographie.corps2Medium, styles.recapValeur]}>{joursSelectionnes.length}</Text>
+              <Text style={[theme.typographie.corps2Medium, styles.recapLibelle]}>
+                {LIB_JOURS_SELECTIONNES}
+              </Text>
+              <Text style={[theme.typographie.corps2Medium, styles.recapValeur]}>
+                {joursSelectionnes.length}
+              </Text>
             </View>
             <View style={styles.recapLigne}>
-              <Text style={[theme.typographie.corpsMedium, styles.recapLibelle]}>Total indicatif</Text>
-              <Text style={[theme.typographie.montantPetit, styles.recapValeur]}>{formaterFCFA(totalSelectionne)}</Text>
+              <Text style={[theme.typographie.corpsMedium, styles.recapLibelle]}>
+                {LIB_TOTAL_RATTRAPAGE}
+              </Text>
+              <Text style={[theme.typographie.montantPetit, styles.recapValeur]}>
+                {formaterFCFA(totalSelectionne)}
+              </Text>
             </View>
           </Carte>
         ) : null}
@@ -256,11 +330,22 @@ export default function Cotiser() {
         <Carte style={styles.paiement}>
           <View style={styles.paiementLigne}>
             <Icone nom="phone-portrait-outline" taille={20} couleur={theme.couleurs.primaire} />
-            <Text style={[theme.typographie.corps2Medium, { color: theme.couleurs.textePrimaire, flex: 1 }]}>
+            <Text
+              style={[
+                theme.typographie.corps2Medium,
+                { color: theme.couleurs.textePrimaire, flex: 1 },
+              ]}
+            >
               Moyen de paiement : {MOYEN_PAIEMENT}
             </Text>
           </View>
-          <Text style={[theme.typographie.corps2, styles.frais, { color: theme.couleurs.texteSecondaire }]}>
+          <Text
+            style={[
+              theme.typographie.corps2,
+              styles.frais,
+              { color: theme.couleurs.texteSecondaire },
+            ]}
+          >
             {MENTION_FRAIS_FEDAPAY}
           </Text>
         </Carte>
@@ -276,6 +361,8 @@ export default function Cotiser() {
   );
 }
 
+// ── Sous-composants ────────────────────────────────────────────────────────
+
 function EcranAttente({
   enAttentePaiement,
   transaction,
@@ -287,15 +374,27 @@ function EcranAttente({
     <Ecran defilement={false}>
       <View style={styles.centré}>
         <Icone nom="time-outline" taille={56} couleur={theme.couleurs.primaire} />
-        <Text style={[theme.typographie.titre2, { color: theme.couleurs.textePrimaire, textAlign: "center" }]}>
-          {enAttentePaiement ? "Validez le paiement sur votre téléphone" : "Vérification en cours…"}
+        <Text
+          style={[
+            theme.typographie.titre2,
+            { color: theme.couleurs.textePrimaire, textAlign: "center" },
+          ]}
+        >
+          {enAttentePaiement
+            ? "Validez le paiement sur votre téléphone"
+            : "Vérification en cours…"}
         </Text>
         {transaction ? (
           <Text style={[theme.typographie.montantGrand, { color: theme.couleurs.primaire }]}>
             {formaterFCFA(transaction.montant)}
           </Text>
         ) : null}
-        <Text style={[theme.typographie.corps2, { color: theme.couleurs.texteSecondaire, textAlign: "center" }]}>
+        <Text
+          style={[
+            theme.typographie.corps2,
+            { color: theme.couleurs.texteSecondaire, textAlign: "center" },
+          ]}
+        >
           {enAttentePaiement
             ? "Revenez dans l'app après avoir confirmé le paiement."
             : "Nous attendons la confirmation de votre opérateur…"}
@@ -305,17 +404,33 @@ function EcranAttente({
   );
 }
 
-function EcranSucces({ transaction, onTerminer }: { transaction: Transaction; onTerminer: () => void }) {
+function EcranSucces({
+  transaction,
+  onTerminer,
+}: {
+  transaction: Transaction;
+  onTerminer: () => void;
+}) {
   return (
     <Ecran defilement={false}>
       <View style={styles.centré}>
         <View style={styles.rondeSucces}>
           <Icone nom="checkmark" taille={40} couleur="#FFFFFF" />
         </View>
-        <Text style={[theme.typographie.titre2, { color: theme.couleurs.textePrimaire, textAlign: "center" }]}>
+        <Text
+          style={[
+            theme.typographie.titre2,
+            { color: theme.couleurs.textePrimaire, textAlign: "center" },
+          ]}
+        >
           Paiement réussi
         </Text>
-        <Text style={[theme.typographie.montantGrand, { color: theme.couleurs.primaire, textAlign: "center" }]}>
+        <Text
+          style={[
+            theme.typographie.montantGrand,
+            { color: theme.couleurs.primaire, textAlign: "center" },
+          ]}
+        >
           {formaterFCFA(transaction.montant)}
         </Text>
         <Bouton libelle="Fermer" onPress={onTerminer} style={{ marginTop: 24 }} />
@@ -323,6 +438,113 @@ function EcranSucces({ transaction, onTerminer }: { transaction: Transaction; on
     </Ecran>
   );
 }
+
+function SectionJoursRattrapables({
+  query,
+  joursSelectionnes,
+  onToggleJour,
+}: {
+  query: UseQueryResult<JourRattrapable[]>;
+  joursSelectionnes: number[];
+  onToggleJour: (id: number) => void;
+}) {
+  if (query.isPending) {
+    return (
+      <Carte>
+        <Squelette width="100%" height={80} rayon={12} />
+      </Carte>
+    );
+  }
+  if (query.isError) {
+    return (
+      <Carte>
+        <EtatErreur
+          message="Impossible de charger les jours à rattraper."
+          onReessayer={() => query.refetch()}
+        />
+      </Carte>
+    );
+  }
+
+  const jours = query.data ?? [];
+
+  return (
+    <Animated.View entering={FadeIn.duration(300)}>
+      <Carte style={styles.sectionRattrapage}>
+        <View style={styles.sectionRattrapeEntete}>
+          <Icone nom="refresh-circle-outline" taille={20} couleur={theme.couleurs.or} />
+          <Text style={[theme.typographie.titre3, { color: theme.couleurs.textePrimaire }]}>
+            {LIB_JOURS_A_RATTRAPER}
+          </Text>
+        </View>
+
+        {jours.length === 0 ? (
+          <EtatVide
+            icone="checkmark-circle-outline"
+            titre={LIB_AUCUN_JOUR_A_RATTRAPER}
+            message="Vous êtes à jour dans vos cotisations."
+          />
+        ) : (
+          <>
+            <Text
+              style={[
+                theme.typographie.corps2,
+                styles.rattrapeConsigne,
+                { color: theme.couleurs.texteSecondaire },
+              ]}
+            >
+              {LIB_RATTRAPER_SELECTION}
+            </Text>
+            {jours.map((j) => {
+              const selectionne = joursSelectionnes.includes(j.id);
+              return (
+                <Pressable
+                  key={j.id}
+                  onPress={() => onToggleJour(j.id)}
+                  style={[
+                    styles.ligneJourRattrape,
+                    selectionne && styles.ligneJourSelectionne,
+                  ]}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: selectionne }}
+                >
+                  <View style={[styles.checkboxRond, selectionne && styles.checkboxRondActif]}>
+                    {selectionne ? (
+                      <Icone nom="checkmark" taille={14} couleur="#FFFFFF" />
+                    ) : null}
+                  </View>
+                  <View style={styles.ligneJourTexte}>
+                    <Text
+                      style={[
+                        theme.typographie.corps2Medium,
+                        { color: theme.couleurs.textePrimaire },
+                      ]}
+                    >
+                      Jour {j.numeroJour} — {formaterDateCourte(j.datePrevue)}
+                    </Text>
+                    <Text style={[theme.typographie.legende, { color: theme.couleurs.grisPerdu }]}>
+                      {LIB_PERDU_RATTRAPABLE}
+                    </Text>
+                  </View>
+                  <Text
+                    style={[
+                      theme.typographie.montantPetit,
+                      { color: theme.couleurs.textePrimaire, flexShrink: 0 },
+                    ]}
+                  >
+                    {formaterFCFA(j.montantDu)}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </>
+        )}
+      </Carte>
+    </Animated.View>
+  );
+}
+
+// ── Styles ─────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   contenu: {
@@ -382,5 +604,50 @@ const styles = StyleSheet.create({
     backgroundColor: theme.couleurs.succes,
     alignItems: "center",
     justifyContent: "center",
+  },
+  // ── Section jours à rattraper
+  sectionRattrapage: {
+    gap: 12,
+  },
+  sectionRattrapeEntete: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  rattrapeConsigne: {
+    marginBottom: 2,
+  },
+  ligneJourRattrape: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.couleurs.bordure,
+  },
+  ligneJourSelectionne: {
+    backgroundColor: theme.couleurs.primaireTresClair,
+    borderColor: theme.couleurs.primaire,
+  },
+  checkboxRond: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    borderColor: theme.couleurs.grisPerdu,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  checkboxRondActif: {
+    backgroundColor: theme.couleurs.primaire,
+    borderColor: theme.couleurs.primaire,
+  },
+  ligneJourTexte: {
+    flex: 1,
+    flexShrink: 1,
+    gap: 2,
   },
 });

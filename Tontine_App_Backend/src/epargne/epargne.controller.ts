@@ -6,12 +6,14 @@ import {
   HttpStatus,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { EpargneService } from './epargne.service';
 import { RetraitEpargneService } from '../retrait-epargne/retrait-epargne.service';
 import { CreateEpargneDto } from './dto/create-epargne.dto';
+import { UpdateEpargneDto } from './dto/update-epargne.dto';
 import { AjouterDepotEpargneDto } from './dto/ajouter-depot-epargne.dto';
 import { CreateRetraitEpargneDto } from '../retrait-epargne/dto/create-retrait-epargne.dto';
 import { UtilisateurCourant } from '../common/decorators/utilisateur-courant.decorator';
@@ -37,14 +39,11 @@ export class EpargneController {
   })
   @Post()
   @HttpCode(HttpStatus.OK)
-  creer(
-    @Body() dto: CreateEpargneDto,
-    @UtilisateurCourant() courant: Membre,
-  ) {
+  creer(@Body() dto: CreateEpargneDto, @UtilisateurCourant() courant: Membre) {
     return this.epargneService.creer(courant.id, dto);
   }
 
-  @ApiOperation({ summary: 'Détail d\'une épargne (avec aperçu de retrait).' })
+  @ApiOperation({ summary: "Détail d'une épargne (avec aperçu de retrait)." })
   @Get(':id')
   findOne(
     @Param('id', ParseIntPipe) id: number,
@@ -53,7 +52,23 @@ export class EpargneController {
     return this.epargneService.findOne(id, courant.id);
   }
 
-  @ApiOperation({ summary: 'Ajouter de l\'argent à une épargne active.' })
+  @ApiOperation({
+    summary:
+      "Modifier le nom et/ou l'objectif d'une epargne active (PATCH). " +
+      "Aucun champ d'argent modifiable. " +
+      "404 si l'epargne n'est pas la votre, 409 si elle n'est pas active.",
+  })
+  @Patch(':id')
+  @HttpCode(HttpStatus.OK)
+  modifier(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateEpargneDto,
+    @UtilisateurCourant() courant: Membre,
+  ) {
+    return this.epargneService.modifier(courant.id, id, dto);
+  }
+
+  @ApiOperation({ summary: "Ajouter de l'argent à une épargne active." })
   @Post(':id/depots')
   @HttpCode(HttpStatus.OK)
   ajouterDepot(
@@ -65,7 +80,7 @@ export class EpargneController {
   }
 
   @ApiOperation({
-    summary: 'Initier un retrait d\'épargne vers Mobile Money (jeton requis).',
+    summary: "Initier un retrait d'épargne vers Mobile Money (jeton requis).",
   })
   @Post(':id/retraits')
   @HttpCode(HttpStatus.CREATED)

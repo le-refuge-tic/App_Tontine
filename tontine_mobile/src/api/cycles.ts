@@ -1,7 +1,7 @@
 import { EST_MODE_DEMO } from "@/constants/env";
-import { delaiDemo, cycleDemo } from "./fixtures";
+import { delaiDemo, cycleDemo, fabriquerJoursRattrapablesDemo } from "./fixtures";
 import { requete, ErreurApi } from "./client";
-import type { Cycle, CycleAvecJours, JourCotisation } from "./types";
+import type { Cycle, CycleAvecJours, JourRattrapable } from "./types";
 
 /** GET /cycles — cycles du membre connecté (sans jours chargés). */
 export async function listerCycles(): Promise<Cycle[]> {
@@ -33,10 +33,10 @@ export async function obtenirCycleEnCours(): Promise<CycleAvecJours | null> {
  * GET /cycles/jours-rattrapables — jours « perdu » du membre (tous cycles),
  * avec leur cycle. Utilisé pour la liste de rattrapage sur l'écran Cotiser.
  */
-export async function obtenirJoursRattrapables(): Promise<JourCotisation[]> {
+export async function obtenirJoursRattrapables(): Promise<JourRattrapable[]> {
   if (EST_MODE_DEMO) {
     await delaiDemo();
-    return cycleDemo.jours.filter((j) => j.statut === "perdu");
+    return fabriquerJoursRattrapablesDemo();
   }
-  return requete<JourCotisation[]>("/cycles/jours-rattrapables");
+  return requete<JourRattrapable[]>("/cycles/jours-rattrapables");
 }

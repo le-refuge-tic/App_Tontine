@@ -12,6 +12,10 @@ export interface RapportMensuel {
     cotise: number;
     retire: number;
     fondsRetenu: number;
+    /** Total épargné (dépôts d'épargne) sur le mois. */
+    epargneDepose?: number;
+    /** Total retiré d'épargne sur le mois. */
+    epargneRetire?: number;
   };
 }
 export type StatutSouscription = "active" | "cloturee";
@@ -116,6 +120,8 @@ export interface EcritureComptable {
   sens: SensEcriture;
   description: string;
   date: string; // ISO UTC
+  /** Nom du projet d'épargne si l'écriture est liée à une épargne. Null sinon. */
+  projetNom?: string | null;
 }
 
 export interface Notification {
@@ -124,6 +130,74 @@ export interface Notification {
   message: string;
   lue: boolean;
   date: string; // ISO UTC
+}
+
+// ── Épargne / Projet ──────────────────────────────────────────────────────
+
+export type StatutEpargne = "active" | "retiree" | "cloturee";
+
+/** Aperçu indicatif renvoyé par le serveur dans chaque EpargneVue. */
+export interface ApercuEpargne {
+  penaliteSiRetraitMaintenant: number;
+  tauxApplicable: number;
+  netEstime: number;
+  /** Vrai si l'objectif est atteint (objectifAtteintLe non null ou montant ≥ objectif). */
+  objectifAtteint: boolean;
+  /** Montant restant à épargner pour atteindre l'objectif (0 si déjà atteint). */
+  resteAAtteindre: number;
+}
+
+/** Vue d'une épargne (projet) telle que renvoyée par GET /epargnes et GET /epargnes/:id. */
+export interface EpargneVue {
+  id: number;
+  montant: number;
+  /** Toujours null pour les nouveaux projets. Ne plus afficher. */
+  dateEcheance: string | null;
+  statut: StatutEpargne;
+  nom: string;
+  /** Montant cible (FCFA, > 0). Obligatoire depuis le prompt M2b. */
+  objectifMontant: number;
+  /**
+   * Date à laquelle l'objectif a été atteint pour la première fois.
+   * Null tant que l'objectif n'est pas atteint.
+   */
+  objectifAtteintLe: string | null; // ISO UTC
+  /** Progression vers l'objectif (0–100). Fourni par le serveur. */
+  progressionPourcent: number;
+  apercu: ApercuEpargne;
+}
+
+/** Résultat de POST /epargnes. */
+export interface ResultatCreationEpargne {
+  epargne: EpargneVue;
+  transaction: Transaction;
+  urlPaiement: string | null;
+}
+
+/** Résultat de POST /epargnes/:id/depots. */
+export interface ResultatDepotEpargne {
+  transaction: Transaction;
+  urlPaiement: string | null;
+}
+
+/**
+ * Jour rattrapable tel que renvoyé par GET /cycles/jours-rattrapables.
+ * Différent de JourCotisation : contient un champ `cycle` imbriqué.
+ */
+export interface JourRattrapable {
+  id: number;
+  numeroJour: number;
+  datePrevue: string;
+  coefficient: number;
+  montantDu: number;
+  montantPaye: number;
+  statut: StatutJourCotisation;
+  cycle: {
+    id: number;
+    numero: number;
+    dateDebut: string;
+    dateFin: string;
+  };
 }
 
 export interface PaireJetons {

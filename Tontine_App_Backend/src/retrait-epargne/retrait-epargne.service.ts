@@ -30,6 +30,7 @@ import {
 import { dateBeninISO } from '../common/utils/dates.util';
 import type { JwtRetraitPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CreateRetraitEpargneDto } from './dto/create-retrait-epargne.dto';
+import { objectifEstAtteint } from '../epargne/epargne.service';
 
 export interface ResultatRetraitEpargne {
   transaction: Transaction;
@@ -41,9 +42,21 @@ export interface ResultatRetraitEpargne {
  * création, verrou pessimiste sur l'épargne, un seul retrait d'épargne en
  * attente à la fois par membre.
  *
- * Le serveur décide du taux (5 % avant l'échéance, 2,75 % à ou après) d'après
- * la date du jour au fuseau Africa/Porto-Novo. Aucune écriture grand livre
- * avant le succès du webhook FedaPay.
+ * Depuis le prompt 7b, le serveur décide du taux en fonction de l'objectif :
+ * - Objectif atteint (objectifAtteintLe non null OU montant ≥ objectifMontant)
+ *   → retenue_epargne_echeance (2,75 %), source retenue_epargne.
+ * - Objectif non atteint → penalite_epargne_anticipee (5 %), source penalite.
+ *
+ * La logique de date (Africa/Porto-Novo, comparaison avec dateEcheance) est
+ * supprimée. `estAnticipe` sur RetraitEpargne mémorise désormais l'inverse de
+ * « objectif atteint » pour que la confirmation webhook choisisse le bon type
+ * d'écriture (penalite vs retenue_epargne) de façon robuste, indépendamment
+ * d'une évolution des paramètres entre la création et la confirmation.
+ *
+ * TODO(decision) : faut-il bloquer le retrait juste après le dépôt (délai
+ *   de confirmation) ? Actuellement non.
+ * TODO(decision) : part du fonds de caisse en cas de pénalité ?
+ * TODO(decision) : arrondi du montant retenu (provisoire : entier supérieur).
  */
 @Injectable()
 export class RetraitEpargneService {
@@ -69,8 +82,7 @@ export class RetraitEpargneService {
   /**
    * Vérifie le jeton de retrait JWT (audience `tontine-retrait`) et que le
    * `subject` correspond au membre demandeur. Retourne le `jti` pour
-   * consommation. Ne consomme PAS le jeton ici : la consommation se fait dans
-   * la transaction DB de `creer()`.
+   * consommation. Ne consomme PAS le jeton ici.
    */
   private extraireEtVerifierJetonRetrait(
     jetonBrut: string,
@@ -108,7 +120,7 @@ export class RetraitEpargneService {
    *    a. Consommer le jeton (INSERT jti — contrainte unique → 401 si rejoué).
    *    b. Vérifier l'appartenance et le statut actif de l'épargne.
    *    c. Refuser si un retrait d'épargne est déjà en attente (409).
-   *    d. Calculer le taux (5 % ou 2,75 %), la retenue, les frais, le net.
+   *    d. Calculer le taux selon l'objectif, la retenue, les frais, le net.
    *    e. Créer la Transaction (retrait) + le RetraitEpargne lié.
    * 4. Appeler FedaPay Payout (montant = net versé).
    * 5. Mettre à jour idFedapay.
@@ -186,9 +198,7 @@ export class RetraitEpargneService {
         .andWhere('tx.epargne_id IS NOT NULL')
         .getCount();
       if (pendingCount > 0) {
-        throw new ConflictException(
-          'Un retrait d\'épargne est déjà en cours.',
-        );
+        throw new ConflictException("Un retrait d'épargne est déjà en cours.");
       }
 
       // d. Montant demandé et garde-fous.
@@ -200,23 +210,30 @@ export class RetraitEpargneService {
       }
       if (montantDemande > epargne.montant) {
         throw new UnprocessableEntityException(
-          'Montant supérieur au solde de l\'épargne.',
+          "Montant supérieur au solde de l'épargne.",
         );
       }
 
-      // Taux (5 % avant l'échéance, 2,75 % à ou après), fuseau Africa/Porto-Novo.
-      const aujourdhui = dateBeninISO();
-      const estAnticipe = aujourdhui < epargne.dateEcheance;
-      const taux = estAnticipe
+      // Taux : objectif atteint → retenue_epargne_echeance (2,75 %) ;
+      //         sinon → penalite_epargne_anticipee (5 %).
+      // Aucune dépendance à la date du jour ni au fuseau horaire.
+      const atteint = objectifEstAtteint(
+        epargne.montant,
+        epargne.objectifMontant,
+        epargne.objectifAtteintLe ?? null,
+      );
+      const taux = atteint
         ? await this.parametres
-            .getNumber('penalite_epargne_anticipee')
-            .catch(() => 5)
-        : await this.parametres
             .getNumber('retenue_epargne_echeance')
-            .catch(() => 2.75);
+            .catch(() => 2.75)
+        : await this.parametres
+            .getNumber('penalite_epargne_anticipee')
+            .catch(() => 5);
+
       const retenue = Math.ceil((montantDemande * taux) / 100);
       // TODO(decision) : mode d'arrondi de la retenue (provisoire : entier
       //   supérieur, l'application garde l'arrondi).
+
       const pourcentageFraisRetrait = await this.parametres
         .getNumber('pourcentage_frais_retrait')
         .catch(() => 0);
@@ -248,11 +265,15 @@ export class RetraitEpargneService {
       const savedTx = await manager.getRepository(Transaction).save(tx);
 
       // f. Créer le RetraitEpargne lié (OneToOne propriétaire).
+      // `estAnticipe` vaut true si l'objectif N'est PAS atteint (pénalité 5 %)
+      // et false si l'objectif est atteint (retenue 2,75 %).
+      // La signification sémantique de ce champ a évolué (prompt 7b) : il
+      // indique désormais « pénalité » plutôt que strictement « anticipé ».
       const retrait = manager.getRepository(RetraitEpargne).create({
         montant: montantDemande,
         tauxApplique: taux,
         montantRetenu: retenue,
-        estAnticipe,
+        estAnticipe: !atteint,
         epargne: { id: epargne.id },
         transaction: { id: savedTx.id },
       });
@@ -263,7 +284,7 @@ export class RetraitEpargneService {
 
     if (!etat.savedTx) {
       throw new UnprocessableEntityException(
-        'Erreur interne lors de la création du retrait d\'épargne.',
+        "Erreur interne lors de la création du retrait d'épargne.",
       );
     }
     const savedTx: Transaction = etat.savedTx;

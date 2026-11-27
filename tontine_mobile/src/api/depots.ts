@@ -1,5 +1,5 @@
 import { EST_MODE_DEMO } from "@/constants/env";
-import { delaiDemo, cycleDemo } from "./fixtures";
+import { delaiDemo, cycleDemo, fabriquerJoursRattrapablesDemo } from "./fixtures";
 import { requete } from "./client";
 import { preparerTransactionDemo } from "./transactions";
 import type { Transaction } from "./types";
@@ -22,9 +22,16 @@ export interface ResultatDepot {
 export async function lancerDepot(jourIds: number[] = []): Promise<ResultatDepot> {
   if (EST_MODE_DEMO) {
     await delaiDemo();
-    const montant = cycleDemo.jours
-      .filter((j) => jourIds.includes(j.id))
-      .reduce((s, j) => s + j.montantDu, 0);
+    // Chercher dans les jours du cycle en cours ET dans les jours rattrapables.
+    const tousLesJours = [
+      ...cycleDemo.jours,
+      ...fabriquerJoursRattrapablesDemo(),
+    ];
+    const montant = jourIds.length > 0
+      ? tousLesJours
+          .filter((j) => jourIds.includes(j.id))
+          .reduce((s, j) => s + j.montantDu, 0)
+      : cycleDemo.miseBase;
     const transaction = preparerTransactionDemo(9001, montant > 0 ? montant : cycleDemo.miseBase, "depot");
     return { transaction, urlPaiement: null };
   }

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Inject,
   Injectable,
   Logger,
@@ -27,23 +28,82 @@ import {
 import { dateBeninISO } from '../common/utils/dates.util';
 import { CreateEpargneDto } from './dto/create-epargne.dto';
 import { AjouterDepotEpargneDto } from './dto/ajouter-depot-epargne.dto';
+import { UpdateEpargneDto } from './dto/update-epargne.dto';
+
+/**
+ * Calcule la progression vers l'objectif, en entier de 0 à 100 (arrondi à
+ * l'inférieur, plafonné à 100).
+ *
+ * Exemple : montant=750, objectif=1000 → 75.
+ *           montant=1200, objectif=1000 → 100 (plafond).
+ */
+export function calculerProgressionPourcent(
+  montant: number,
+  objectif: number,
+): number {
+  if (objectif <= 0) return 0;
+  return Math.min(100, Math.floor((montant * 100) / objectif));
+}
+
+/**
+ * Détermine si l'objectif est atteint au sens du règlement de retrait.
+ *
+ * L'objectif est considéré atteint si :
+ * - `objectifAtteintLe` est non null (atteint lors d'un dépôt passé), OU
+ * - `montant >= objectifMontant` au moment de l'appel.
+ *
+ * Cette vérification double garantit que l'objectif reste acquis même si le
+ * solde est retombé sous l'objectif après un retrait partiel.
+ *
+ * TODO(decision) : retrait partiel qui ramène le solde sous l'objectif →
+ *   l'objectif reste acquis (choix actuel). Faut-il le réviser ?
+ */
+export function objectifEstAtteint(
+  montant: number,
+  objectifMontant: number,
+  objectifAtteintLe: Date | null,
+): boolean {
+  return objectifAtteintLe != null || montant >= objectifMontant;
+}
 
 /** Aperçu indicatif du retrait total de l'épargne si l'on retirait maintenant. */
 export interface ApercuEpargne {
   /** Montant retenu (pénalité ou retenue) sur un retrait total immédiat. */
   penaliteSiRetraitMaintenant: number;
-  /** Taux applicable : 5 % avant l'échéance, 2,75 % à ou après. */
+  /** Taux applicable : 5 % si objectif non atteint, 2,75 % si atteint. */
   tauxApplicable: number;
   /** Montant net estimé versé au membre (après retenue et frais). */
   netEstime: number;
+  /** Vrai si l'objectif est atteint (objectifAtteintLe non null ou montant ≥ objectif). */
+  objectifAtteint: boolean;
+  /** Montant restant à épargner pour atteindre l'objectif (max 0). */
+  resteAAtteindre: number;
 }
 
 /** Vue d'une épargne renvoyée à l'API (sans la relation `membre`). */
 export interface EpargneVue {
   id: number;
   montant: number;
-  dateEcheance: string;
+  /** Toujours null depuis le prompt 7b (plus de date de fin). */
+  dateEcheance: string | null;
   statut: StatutEpargne;
+  /** Nom du projet d'épargne (2 à 100 caractères). */
+  nom: string;
+  /** Montant cible (FCFA, > 0). Obligatoire depuis le prompt 7b. */
+  objectifMontant: number;
+  /**
+   * Date à laquelle l'objectif a été atteint pour la première fois.
+   * Null tant que l'objectif n'est pas atteint. Ne se vide jamais.
+   */
+  objectifAtteintLe: Date | null;
+  /**
+   * Progression en pourcentage (entier entre 0 et 100, arrondi à l'inférieur,
+   * plafonné à 100).
+   *
+   * TODO(decision) : comment afficher la progression lorsque le montant dépasse
+   *   l'objectif ? Actuellement plafonné à 100.
+   */
+  progressionPourcent: number;
   apercu: ApercuEpargne;
 }
 
@@ -116,9 +176,8 @@ export class EpargneService {
    * Crée une épargne (statut actif, montant 0) et initie le dépôt initial
    * FedaPay en un seul geste. Renvoie `{ epargne, transaction, urlPaiement }`.
    *
-   * Si le dépôt FedaPay échoue, l'épargne reste active avec montant 0 (choix le
-   * plus simple) : le membre peut y ajouter de l'argent via
-   * `POST /epargnes/:id/depots` ou l'ignorer.
+   * - `dateEcheance` du DTO est ignorée silencieusement (plus de date de fin).
+   * - `objectifMontant` est obligatoire (validé par le DTO : entier ≥ 1).
    */
   async creer(
     membreId: number,
@@ -131,12 +190,7 @@ export class EpargneService {
         `Le montant initial doit être d'au moins ${minimale} FCFA.`,
       );
     }
-    const aujourdhui = dateBeninISO();
-    if (dto.dateEcheance <= aujourdhui) {
-      throw new BadRequestException(
-        "La date d'échéance doit être dans le futur.",
-      );
-    }
+    // dateEcheance ignorée silencieusement (plus de règle « date dans le futur »).
 
     // 2. Frais (ajoutés au montant, comme la cotisation).
     const pourcentageFrais = await this.lireFraisDepot();
@@ -144,12 +198,12 @@ export class EpargneService {
     const montantTotal = dto.montantInitial + frais;
 
     // 3. Anti double-clic : une transaction en_attente identique
-    //    (même montant total + même échéance) dans les 10 dernières minutes
+    //    (même montant total + même objectif) dans les 10 dernières minutes
     //    est réutilisée.
     const existante = await this.chercherDoublonCreation(
       membreId,
       montantTotal,
-      dto.dateEcheance,
+      dto.objectifMontant,
     );
     if (existante) {
       const taux = await this.lireTaux();
@@ -160,11 +214,14 @@ export class EpargneService {
       };
     }
 
-    // 4. Créer l'épargne (montant 0, active).
+    // 4. Créer l'épargne (montant 0, active, sans date d'échéance).
     const epargne = this.epargneRepo.create({
       montant: 0,
-      dateEcheance: dto.dateEcheance,
+      dateEcheance: null,
       statut: StatutEpargne.ACTIVE,
+      nom: dto.nom,
+      objectifMontant: dto.objectifMontant,
+      objectifAtteintLe: null,
       membre: { id: membreId },
     });
     const savedEpargne = await this.epargneRepo.save(epargne);
@@ -180,13 +237,67 @@ export class EpargneService {
 
     const taux = await this.lireTaux();
     return {
-      epargne: this.versVue(
-        { ...savedEpargne, montant: 0 },
-        taux,
-      ),
+      epargne: this.versVue({ ...savedEpargne, montant: 0 }, taux),
       transaction,
       urlPaiement,
     };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Modification du nom et de l'objectif (PATCH /epargnes/:id)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Modifie le nom et/ou l'objectif d'une épargne ACTIVE appartenant au
+   * membre.
+   *
+   * - 404 si l'épargne est introuvable ou n'appartient pas au membre.
+   * - 409 si l'épargne n'est pas active.
+   * - 409 si l'on tente de modifier l'objectif alors qu'un dépôt a déjà réussi
+   *   (montant > 0 ou objectifAtteintLe non null) : message clair.
+   *
+   * Le nom reste toujours modifiable tant que l'épargne est active.
+   *
+   * TODO(decision) : autoriser une hausse de l'objectif après dépôt ?
+   */
+  async modifier(
+    membreId: number,
+    epargneId: number,
+    dto: UpdateEpargneDto,
+  ): Promise<EpargneVue> {
+    const epargne = await this.epargneRepo.findOne({
+      where: { id: epargneId },
+      relations: { membre: true },
+    });
+    if (!epargne || epargne.membre.id !== membreId) {
+      throw new NotFoundException(`Épargne introuvable : ${epargneId}.`);
+    }
+    if (epargne.statut !== StatutEpargne.ACTIVE) {
+      throw new ConflictException(
+        "Cette épargne n'est plus active : impossible de la modifier.",
+      );
+    }
+
+    // L'objectif n'est modifiable que si aucun dépôt n'a encore réussi.
+    // Condition : montant = 0 ET objectifAtteintLe null.
+    if (dto.objectifMontant !== undefined) {
+      const depotDejaReussi =
+        epargne.montant > 0 || epargne.objectifAtteintLe != null;
+      if (depotDejaReussi) {
+        throw new ConflictException(
+          "L'objectif ne peut plus être modifié : un dépôt a déjà été confirmé sur ce projet.",
+        );
+      }
+      epargne.objectifMontant = dto.objectifMontant;
+    }
+
+    if (dto.nom !== undefined) {
+      epargne.nom = dto.nom;
+    }
+
+    const saved = await this.epargneRepo.save(epargne);
+    const taux = await this.lireTaux();
+    return this.versVue(saved, taux);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -250,9 +361,7 @@ export class EpargneService {
 
   /**
    * Crée la Transaction de dépôt FedaPay liée à une épargne, appelle FedaPay
-   * et génère le lien de paiement. En cas d'échec FedaPay, marque la
-   * transaction `echoue` et lève `ServiceUnavailableException` (aucune
-   * écriture, l'épargne reste inchangée).
+   * et génère le lien de paiement.
    */
   private async creerDepotFedaPay(
     membreId: number,
@@ -335,7 +444,7 @@ export class EpargneService {
   private async chercherDoublonCreation(
     membreId: number,
     montantTotal: number,
-    dateEcheance: string,
+    objectifMontant: number,
   ): Promise<{ tx: Transaction; epargne: Epargne } | null> {
     const dixMinutesAvant = new Date(Date.now() - 10 * 60 * 1000);
     const candidates = await this.txRepo.find({
@@ -351,7 +460,7 @@ export class EpargneService {
         tx.dateOperation >= dixMinutesAvant &&
         tx.montant === montantTotal &&
         tx.epargne != null &&
-        tx.epargne.dateEcheance === dateEcheance
+        tx.epargne.objectifMontant === objectifMontant
       ) {
         return { tx, epargne: tx.epargne };
       }
@@ -387,7 +496,9 @@ export class EpargneService {
   }
 
   private async lireFraisDepot(): Promise<number> {
-    return this.parametres.getNumber('pourcentage_frais_fedapay').catch(() => 0);
+    return this.parametres
+      .getNumber('pourcentage_frais_fedapay')
+      .catch(() => 0);
   }
 
   private async lireTaux(): Promise<TauxEpargne> {
@@ -403,20 +514,26 @@ export class EpargneService {
     return { penalite, retenue, fraisRetraitPct };
   }
 
-  private calculerApercu(
-    epargne: Epargne,
-    taux: TauxEpargne,
-  ): ApercuEpargne {
-    const aujourdhui = dateBeninISO();
-    const estAnticipe = aujourdhui < epargne.dateEcheance;
-    const tauxApplicable = estAnticipe ? taux.penalite : taux.retenue;
+  private calculerApercu(epargne: Epargne, taux: TauxEpargne): ApercuEpargne {
+    const atteint = objectifEstAtteint(
+      epargne.montant,
+      epargne.objectifMontant,
+      epargne.objectifAtteintLe ?? null,
+    );
+    const tauxApplicable = atteint ? taux.retenue : taux.penalite;
     const retenu = Math.ceil((epargne.montant * tauxApplicable) / 100);
     const frais = calculerFrais(epargne.montant, taux.fraisRetraitPct);
     const net = Math.max(0, epargne.montant - retenu - frais);
+    const resteAAtteindre = Math.max(
+      0,
+      epargne.objectifMontant - epargne.montant,
+    );
     return {
       penaliteSiRetraitMaintenant: retenu,
       tauxApplicable,
       netEstime: net,
+      objectifAtteint: atteint,
+      resteAAtteindre,
     };
   }
 
@@ -424,8 +541,15 @@ export class EpargneService {
     return {
       id: epargne.id,
       montant: epargne.montant,
-      dateEcheance: epargne.dateEcheance,
+      dateEcheance: epargne.dateEcheance ?? null,
       statut: epargne.statut,
+      nom: epargne.nom ?? 'Mon projet',
+      objectifMontant: epargne.objectifMontant,
+      objectifAtteintLe: epargne.objectifAtteintLe ?? null,
+      progressionPourcent: calculerProgressionPourcent(
+        epargne.montant,
+        epargne.objectifMontant,
+      ),
       apercu: this.calculerApercu(epargne, taux),
     };
   }

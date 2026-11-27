@@ -13,6 +13,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { RapportService } from './rapport.service';
 import { EcritureComptable } from '../ecriture-comptable/entities/ecriture-comptable.entity';
 import { Cycle } from '../cycle/entities/cycle.entity';
+import { Epargne } from '../epargne/entities/epargne.entity';
+import { Transaction } from '../transaction/entities/transaction.entity';
 import { SensEcriture, TypeEcriture } from '../common/enums';
 import { moisPortoNovo } from '../common/utils/dates.util';
 
@@ -299,7 +301,7 @@ describe('RapportService', () => {
 
   // ─── Libellés des écritures épargne ──────────────────────────────────────
 
-  it('libellés : Dépôt épargne, Retrait épargne, Pénalité retrait anticipé, Retenue de tenue du fonds', async () => {
+  it('libellés : Dépôt épargne, Retrait épargne, Pénalité : objectif non atteint, Retenue de tenue du fonds', async () => {
     const ecritures = [
       fabriqueEcriture({
         id: 30,
@@ -320,7 +322,7 @@ describe('RapportService', () => {
         type: TypeEcriture.PENALITE,
         sens: SensEcriture.DEBIT,
         montant: 250,
-        description: 'Pénalité retrait anticipé',
+        description: 'Pénalité : objectif non atteint',
       }),
       fabriqueEcriture({
         id: 33,
@@ -335,13 +337,13 @@ describe('RapportService', () => {
     const descs = rapport.ecritures.map((e) => e.description);
     expect(descs).toContain('Dépôt épargne');
     expect(descs).toContain('Retrait épargne');
-    expect(descs).toContain('Pénalité retrait anticipé');
+    expect(descs).toContain('Pénalité : objectif non atteint');
     expect(descs).toContain('Retenue de tenue du fonds');
   });
 
   // ─── Total retiré cotisation inchangé par un retrait d'épargne ───────────
 
-  it('un retrait d\'épargne n\'affecte pas le total retiré de cotisation', async () => {
+  it("un retrait d'épargne n'affecte pas le total retiré de cotisation", async () => {
     const ecritures = [
       // Retrait de cotisation classique → compte dans retire.
       fabriqueEcriture({
@@ -396,5 +398,119 @@ describe('RapportService', () => {
     expect(rapport.totaux.epargneDepose).toBe(2000);
     // Les deux totaux sont indépendants.
     expect(rapport.totaux.cotise + rapport.totaux.epargneDepose).toBe(3000);
+  });
+
+  // ─── projetNom (prompt 7) ─────────────────────────────────────────────────
+
+  it("projetNom present pour les ecritures d'epargne (via transaction.epargne)", async () => {
+    const transaction60 = Object.assign(new Transaction(), {
+      id: 60,
+      epargne: Object.assign(new Epargne(), { id: 1, nom: 'Achat moto' }),
+    });
+    const transaction61 = Object.assign(new Transaction(), {
+      id: 61,
+      epargne: Object.assign(new Epargne(), { id: 2, nom: 'Achat terrain' }),
+    });
+    const ecritures = [
+      fabriqueEcriture({
+        id: 60,
+        type: TypeEcriture.EPARGNE,
+        sens: SensEcriture.CREDIT,
+        montant: 5000,
+        transaction: transaction60,
+      }),
+      fabriqueEcriture({
+        id: 61,
+        type: TypeEcriture.RETRAIT_EPARGNE,
+        sens: SensEcriture.DEBIT,
+        montant: 4750,
+        transaction: transaction61,
+      }),
+      // Écriture de cotisation : pas de transaction ni d'épargne → projetNom null
+      fabriqueEcriture({
+        id: 62,
+        type: TypeEcriture.COTISATION,
+        sens: SensEcriture.CREDIT,
+        montant: 500,
+        transaction: null,
+      }),
+    ];
+    ecritureRepoMock.createQueryBuilder.mockReturnValue(fabriqueQb(ecritures));
+    const rapport = await service.rapport(1, '2026-11');
+
+    expect(rapport.ecritures).toHaveLength(3);
+    // Écriture 60 : dépôt épargne « Achat moto »
+    expect(rapport.ecritures[0].projetNom).toBe('Achat moto');
+    // Écriture 61 : retrait épargne « Achat terrain »
+    expect(rapport.ecritures[1].projetNom).toBe('Achat terrain');
+    // Écriture 62 : cotisation sans épargne → projetNom null
+    expect(rapport.ecritures[2].projetNom).toBeNull();
+  });
+
+  it('projetNom null pour une écriture sans transaction (cotisation au comptant)', async () => {
+    const ecritures = [
+      fabriqueEcriture({
+        id: 70,
+        type: TypeEcriture.COTISATION,
+        sens: SensEcriture.CREDIT,
+        montant: 1000,
+        transaction: null, // pas de transaction FedaPay
+      }),
+    ];
+    ecritureRepoMock.createQueryBuilder.mockReturnValue(fabriqueQb(ecritures));
+    const rapport = await service.rapport(1, '2026-11');
+
+    expect(rapport.ecritures[0].projetNom).toBeNull();
+  });
+
+  it('projetNom null pour une écriture avec transaction mais sans epargne (retrait cotisation)', async () => {
+    const transaction80 = Object.assign(new Transaction(), {
+      id: 80,
+      epargne: null, // retrait de cotisation, pas d'épargne
+    });
+    const ecritures = [
+      fabriqueEcriture({
+        id: 80,
+        type: TypeEcriture.RETRAIT,
+        sens: SensEcriture.DEBIT,
+        montant: 3000,
+        transaction: transaction80,
+      }),
+    ];
+    ecritureRepoMock.createQueryBuilder.mockReturnValue(fabriqueQb(ecritures));
+    const rapport = await service.rapport(1, '2026-11');
+
+    expect(rapport.ecritures[0].projetNom).toBeNull();
+  });
+
+  it("totaux inchanges par l'ajout de projetNom (pas de double-comptage)", async () => {
+    const transaction90 = Object.assign(new Transaction(), {
+      id: 90,
+      epargne: Object.assign(new Epargne(), { id: 1, nom: 'Projet test' }),
+    });
+    const ecritures = [
+      fabriqueEcriture({
+        id: 90,
+        type: TypeEcriture.EPARGNE,
+        sens: SensEcriture.CREDIT,
+        montant: 5000,
+        transaction: transaction90,
+      }),
+      fabriqueEcriture({
+        id: 91,
+        type: TypeEcriture.COTISATION,
+        sens: SensEcriture.CREDIT,
+        montant: 1000,
+        transaction: null,
+      }),
+    ];
+    ecritureRepoMock.createQueryBuilder.mockReturnValue(fabriqueQb(ecritures));
+    const rapport = await service.rapport(1, '2026-11');
+
+    // Les totaux doivent correspondre exactement aux montants des écritures.
+    expect(rapport.totaux.epargneDepose).toBe(5000);
+    expect(rapport.totaux.cotise).toBe(1000);
+    expect(rapport.totaux.retire).toBe(0);
+    expect(rapport.totaux.epargneRetire).toBe(0);
   });
 });

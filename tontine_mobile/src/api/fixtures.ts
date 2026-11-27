@@ -2,7 +2,9 @@ import { DELAI_DEMO_MS } from "@/constants/app";
 import type {
   CycleAvecJours,
   EcritureComptable,
+  EpargneVue,
   JourCotisation,
+  JourRattrapable,
   Membre,
   Notification,
   Portefeuille,
@@ -140,6 +142,15 @@ export const ecrituresDemo: EcritureComptable[] = [
     description: "Cotisation — 2 novembre (jour ×2)",
     date: "2026-11-02T07:28:00Z",
   },
+  {
+    id: 104,
+    type: "epargne",
+    montant: 25000,
+    sens: "credit",
+    description: "Dépôt épargne — 3 novembre",
+    date: "2026-11-03T09:10:00Z",
+    projetNom: "Achat moto",
+  },
 ];
 
 // ── Notifications ──────────────────────────────────────────────────────────
@@ -209,4 +220,80 @@ export function prochaineTransactionDemo(id: number): Transaction | null {
   etat.tentatives += 1;
   etatsTransactions.set(id, etat);
   return fabriqueTransaction(id, etat.montant, etat.type, etat.tentatives >= 2 ? "reussi" : "en_attente");
+}
+
+// ── Jours rattrapables (démo) ─────────────────────────────────────────────
+// Les jours 3 à 11 du cycle démo sont « perdu » (voir fabriquerJoursDemo).
+export function fabriquerJoursRattrapablesDemo(): JourRattrapable[] {
+  const jours = fabriquerJoursDemo();
+  return jours
+    .filter((j) => j.statut === "perdu")
+    .map((j): JourRattrapable => ({
+      ...j,
+      cycle: {
+        id: cycleDemo.id,
+        numero: cycleDemo.numero,
+        dateDebut: cycleDemo.dateDebut,
+        dateFin: cycleDemo.dateFin,
+      },
+    }));
+}
+
+// ── Épargnes / Projets (démo) ─────────────────────────────────────────────
+// Magasin mutable pour simuler création, dépôt, modification.
+let _prochainIdEpargne = 3;
+
+const _epargnesMap = new Map<number, EpargneVue>([
+  [
+    1,
+    {
+      id: 1,
+      nom: "Achat moto",
+      montant: 25000,
+      dateEcheance: null,
+      statut: "active",
+      objectifMontant: 100000,
+      objectifAtteintLe: null,
+      progressionPourcent: 25,
+      apercu: {
+        penaliteSiRetraitMaintenant: 1250,
+        tauxApplicable: 5,
+        netEstime: 23750,
+        objectifAtteint: false,
+        resteAAtteindre: 75000,
+      },
+    },
+  ],
+  [
+    2,
+    {
+      id: 2,
+      nom: "Fête de fin d'année",
+      montant: 50000,
+      dateEcheance: null,
+      statut: "active",
+      objectifMontant: 50000,
+      objectifAtteintLe: "2026-11-03T09:10:00Z",
+      progressionPourcent: 100,
+      apercu: {
+        penaliteSiRetraitMaintenant: 1375,
+        tauxApplicable: 2.75,
+        netEstime: 48625,
+        objectifAtteint: true,
+        resteAAtteindre: 0,
+      },
+    },
+  ],
+]);
+
+export function epargnesDemoListe(): EpargneVue[] {
+  return Array.from(_epargnesMap.values());
+}
+
+export function epargnesDemoMap(): Map<number, EpargneVue> {
+  return _epargnesMap;
+}
+
+export function prochainIdEpargneDemo(): number {
+  return _prochainIdEpargne++;
 }

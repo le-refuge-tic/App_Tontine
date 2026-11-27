@@ -41,21 +41,21 @@ export class TransactionService {
     @Inject(FEDAPAY_CLIENT)
     private readonly fedapayClient: IFedapayClient,
     private readonly notificationService: NotificationService,
-  ) {}
+  ) { }
 
   findAll(membreId?: number, options?: PageOptions): Promise<Transaction[]> {
     return membreId !== undefined
       ? this.repo.find({
-          where: { membre: { id: membreId } },
-          skip: options?.skip,
-          take: options?.take,
-          order: { dateOperation: 'DESC' },
-        })
+        where: { membre: { id: membreId } },
+        skip: options?.skip,
+        take: options?.take,
+        order: { dateOperation: 'DESC' },
+      })
       : this.repo.find({
-          skip: options?.skip,
-          take: options?.take,
-          order: { dateOperation: 'DESC' },
-        });
+        skip: options?.skip,
+        take: options?.take,
+        order: { dateOperation: 'DESC' },
+      });
   }
 
   async findOne(id: number, membreId?: number): Promise<Transaction> {
@@ -502,6 +502,14 @@ export class TransactionService {
         });
         if (epargne) {
           epargne.montant += montantEpargne;
+          // Renseigner objectifAtteintLe la première fois que le montant
+          // atteint ou dépasse l'objectif. Ce champ ne se vide jamais.
+          if (
+            epargne.objectifAtteintLe == null &&
+            epargne.montant >= epargne.objectifMontant
+          ) {
+            epargne.objectifAtteintLe = new Date();
+          }
           await epargneRepo.save(epargne);
         }
       }
@@ -595,7 +603,7 @@ export class TransactionService {
         ? SourceCaisse.PENALITE
         : SourceCaisse.RETENUE_EPARGNE;
       const descriptionRetenue = estAnticipe
-        ? 'Pénalité retrait anticipé'
+        ? 'Pénalité : objectif non atteint'
         : 'Retenue de tenue du fonds';
 
       const ecritureRetenue = ecritureRepo.create({
@@ -742,18 +750,18 @@ export class TransactionService {
     const soldeCotisation = Math.max(
       0,
       Number(rawResult?.coti_credit ?? 0) -
-        Number(rawResult?.coti_debit ?? 0) -
-        Number(rawResult?.retrait_debit ?? 0),
+      Number(rawResult?.coti_debit ?? 0) -
+      Number(rawResult?.retrait_debit ?? 0),
     );
     const soldeEpargne = Math.max(
       0,
       Number(rawResult?.epargne_credit ?? 0) -
-        Number(rawResult?.epargne_debit ?? 0),
+      Number(rawResult?.epargne_debit ?? 0),
     );
     const soldeBloque = Math.max(
       0,
       Number(rawResult?.bloque_credit ?? 0) -
-        Number(rawResult?.bloque_debit ?? 0),
+      Number(rawResult?.bloque_debit ?? 0),
     );
     await manager
       .getRepository(Portefeuille)

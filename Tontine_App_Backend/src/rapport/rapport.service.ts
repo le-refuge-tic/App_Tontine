@@ -15,9 +15,22 @@ export interface TotauxRapport {
   epargneRetire: number;
 }
 
+/**
+ * Écriture comptable enrichie avec le nom du projet (si écriture d'épargne).
+ */
+export interface EcritureRapport extends EcritureComptable {
+  /**
+   * Nom du projet d'épargne si l'écriture est liée à une épargne (dépôt,
+   * retrait d'épargne, pénalité, retenue). Null sinon.
+   *
+   * Calculé à la lecture (JOIN avec epargnes via transaction.epargne_id).
+   */
+  projetNom: string | null;
+}
+
 export interface RapportMensuel {
   mois: string;
-  ecritures: EcritureComptable[];
+  ecritures: EcritureRapport[];
   totaux: TotauxRapport;
 }
 
@@ -58,6 +71,7 @@ export class RapportService {
       .createQueryBuilder('e')
       .leftJoinAndSelect('e.cycle', 'cycle')
       .leftJoinAndSelect('e.transaction', 'transaction')
+      .leftJoinAndSelect('transaction.epargne', 'epargne') // JOIN pour projetNom
       .where('e.membre_id = :membreId', { membreId })
       .andWhere(
         // Écriture avec cycle → mois du début de cycle.
@@ -84,8 +98,14 @@ export class RapportService {
 
     const ecritures = await qb.getMany();
 
+    // Enrichir chaque écriture avec projetNom (calculé à la lecture).
+    const ecrituresAvecProjet: EcritureRapport[] = ecritures.map((e) => ({
+      ...e,
+      projetNom: e.transaction?.epargne?.nom ?? null,
+    }));
+
     const totaux: TotauxRapport = {
-      cotise: ecritures
+      cotise: ecrituresAvecProjet
         .filter(
           (e) =>
             e.type === TypeEcriture.COTISATION &&
@@ -96,26 +116,26 @@ export class RapportService {
       // versé au membre (écriture RETRAIT) compte. Les retraits d'épargne
       // (`retrait_epargne`, `penalite`, `retenue_epargne`) sont exclus du
       // total retiré de cotisation : ils sont comptés dans `epargneRetire`.
-      retire: ecritures
+      retire: ecrituresAvecProjet
         .filter(
           (e) =>
             e.type === TypeEcriture.RETRAIT && e.sens === SensEcriture.DEBIT,
         )
         .reduce((s, e) => s + e.montant, 0),
-      fondsRetenu: ecritures
+      fondsRetenu: ecrituresAvecProjet
         .filter(
           (e) =>
             e.type === TypeEcriture.FONDS_CAISSE &&
             e.sens === SensEcriture.DEBIT,
         )
         .reduce((s, e) => s + e.montant, 0),
-      epargneDepose: ecritures
+      epargneDepose: ecrituresAvecProjet
         .filter(
           (e) =>
             e.type === TypeEcriture.EPARGNE && e.sens === SensEcriture.CREDIT,
         )
         .reduce((s, e) => s + e.montant, 0),
-      epargneRetire: ecritures
+      epargneRetire: ecrituresAvecProjet
         .filter(
           (e) =>
             (e.type === TypeEcriture.RETRAIT_EPARGNE ||
@@ -126,7 +146,7 @@ export class RapportService {
         .reduce((s, e) => s + e.montant, 0),
     };
 
-    return { mois, ecritures, totaux };
+    return { mois, ecritures: ecrituresAvecProjet, totaux };
   }
 
   /**
